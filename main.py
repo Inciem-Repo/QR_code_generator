@@ -6,7 +6,6 @@ Orchestrates the microservices
 from api_service import app
 import sys
 
-
 def main():
     """Main entry point for the application"""
     print("=" * 50)
@@ -38,4 +37,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
