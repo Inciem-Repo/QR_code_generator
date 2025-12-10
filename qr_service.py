@@ -120,4 +120,3 @@ if __name__ == "__main__":
         print(f"QR code saved to {output_file}")
     else:
         print("Failed to generate QR code")
-
