@@ -15,9 +15,59 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 from qr_service import QRCodeService
+from services.ads_service import AdsService
+from services.admin_service import AdminService
+from services.auth_service import find_user_by_id
+from services.qr_history_service import log_qr_generation
+from database import db
+import asyncio
+from utils.jwt_utils import create_access_token, decode_access_token
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
+
+@app.after_request
+def add_standard_fields(response):
+    """
+    Standardize all JSON responses to include message, status, and status_code.
+    """
+    if response.is_json:
+        try:
+            data = response.get_json()
+            
+            # Prepare standard fields
+            status = "success" if response.status_code < 400 else "error"
+            status_code = response.status_code
+            message = "successful"
+            
+            if isinstance(data, dict):
+                # Preserving existing message if present
+                if "message" in data:
+                    message = data.pop("message")
+                # If there's an 'error' field but no 'message', use it
+                elif "error" in data:
+                    message = data["error"]
+                
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    **data
+                }
+            else:
+                # For lists or other types
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    "data": data
+                }
+            
+            response.set_data(json.dumps(standard_response))
+        except Exception:
+            pass # Fallback to original
+            
+    return response
 
 # Paths and configuration
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -39,9 +89,6 @@ VALID_PLACEMENTS = {
 
 ADMIN_USERNAME = "admin@123"
 ADMIN_PASSWORD = "1234"
-
-# In-memory state for simplicity
-active_tokens = set()
 
 # Initialize QR Code Service
 qr_service = QRCodeService()
@@ -106,11 +153,70 @@ def require_auth(fn):
         if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Unauthorized", "message": "Missing Bearer token"}), 401
         token = auth_header.split(" ", 1)[1]
-        if token not in active_tokens:
-            return jsonify({"error": "Unauthorized", "message": "Invalid or expired token"}), 401
+        
+        payload = decode_access_token(token)
+        if not payload or payload.get("role") != "admin":
+            return jsonify({"error": "Unauthorized", "message": "Invalid or expired admin token"}), 401
+            
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def require_user(fn):
+    """Decorator to require user authentication via bearer token (user_id)."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Check header first then query param
+        auth_header = request.headers.get("Authorization", "")
+        token = None
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+        else:
+            token = request.args.get("authorization")
+
+        if not token:
+            return jsonify({"error": "Unauthorized", "message": "Authentication required (Token or query param)"}), 401
+        
+        payload = decode_access_token(token)
+        if not payload or "sub" not in payload:
+            return jsonify({"error": "Unauthorized", "message": "Invalid or expired user token"}), 401
+            
+        user_id = payload["sub"]
+        user = asyncio.run(find_user_by_id(user_id))
+        if not user:
+            return jsonify({"error": "Unauthorized", "message": "User not found"}), 401
+            
+        # Add user to request for use in route
+        request.user = user
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def load_settings():
+    """Load global settings."""
+    settings_file = os.path.join(BASE_DIR, "settings.json")
+    if not os.path.exists(settings_file):
+        return {"ads_enabled": True}
+    try:
+        with open(settings_file, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {"ads_enabled": True}
+
+
+def save_settings(settings):
+    """Save global settings."""
+    settings_file = os.path.join(BASE_DIR, "settings.json")
+    with open(settings_file, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=2)
+
+
+def is_ads_enabled():
+    """Check if ads are globally enabled."""
+    return load_settings().get("ads_enabled", True)
 
 
 def serialize_ad(ad: dict) -> dict:
@@ -141,12 +247,53 @@ def admin_login():
     if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
         return jsonify({"error": "Unauthorized", "message": "Invalid credentials"}), 401
 
-    token = uuid.uuid4().hex
-    active_tokens.add(token)
+    from services.auth_service import find_user_by_email, create_user
+    admin_user = asyncio.run(find_user_by_email(username))
+    
+    if not admin_user:
+        admin_user = asyncio.run(create_user(
+            name="Admin",
+            email=username,
+            role="admin"
+        ))
+    
+    mongo_id = admin_user.get("mongo_id")
+
+    token = create_access_token(data={
+        "sub": username,
+        "mongo_id": mongo_id,
+        "name": "Admin",
+        "role": "admin"
+    })
     return jsonify({"token": token, "tokenType": "Bearer"}), 200
 
 
-# ---------------------- Ads CRUD ---------------------- #
+@app.route("/admin/ads/status", methods=["GET"])
+def get_global_ads_status():
+    """Get the current global status of advertisements."""
+    return jsonify({"ads_enabled": is_ads_enabled()}), 200
+
+
+@app.route("/admin/ads/toggle", methods=["POST"])
+@require_auth
+def toggle_global_ads():
+    """Enable or disable advertisements globally."""
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled")
+    if enabled is None:
+        return jsonify({"error": "Bad Request", "message": "Missing 'enabled' boolean"}), 400
+    
+    settings = load_settings()
+    settings["ads_enabled"] = bool(enabled)
+    save_settings(settings)
+    
+    return jsonify({
+        "message": f"Ads {'enabled' if settings['ads_enabled'] else 'disabled'} successfully",
+        "ads_enabled": settings["ads_enabled"]
+    }), 200
+
+
+
 @app.route("/ads", methods=["POST"])
 @require_auth
 def create_ad():
@@ -188,11 +335,12 @@ def create_ad():
 @app.route("/ads", methods=["GET"])
 def list_ads():
     """List advertisements, optionally filtered by placement."""
+    if not asyncio.run(AdminService.is_ads_enabled()):
+        return jsonify([]), 200
+
     placement = request.args.get("placement")
-    results = ads_data
-    if placement:
-        results = [ad for ad in ads_data if ad["placement"] == placement]
-    return jsonify([serialize_ad(ad) for ad in results]), 200
+    ads = asyncio.run(AdsService.get_all_ads(placement=placement, only_active=True))
+    return jsonify([serialize_ad(ad) for ad in ads]), 200
 
 
 @app.route("/ads/<int:ad_id>", methods=["PUT"])
@@ -265,6 +413,49 @@ def delete_ad(ad_id: int):
     return jsonify({"deleted": ad_id}), 200
 
 
+@app.route("/ads/<int:ad_id>/status", methods=["POST"])
+@require_auth
+def set_ad_status(ad_id: int):
+    """Explicitly enable or disable a specific advertisement."""
+    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    if not ad:
+        return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
+    
+    data = request.get_json(silent=True) or {}
+    is_active = data.get("isActive")
+    if is_active is None:
+        return jsonify({"error": "Bad Request", "message": "Missing 'isActive' boolean"}), 400
+    
+    ad["isActive"] = bool(is_active)
+    save_ads_data(ads_data)
+    
+    status_str = "enabled" if ad["isActive"] else "disabled"
+    return jsonify({
+        "message": f"Ad {ad_id} {status_str} successfully",
+        "ad_id": ad_id,
+        "isActive": ad["isActive"]
+    }), 200
+
+
+@app.route("/ads/<int:ad_id>/toggle", methods=["POST"])
+@require_auth
+def toggle_ad_status(ad_id: int):
+    """Toggle the active status of a specific advertisement."""
+    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    if not ad:
+        return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
+    
+    ad["isActive"] = not ad.get("isActive", True)
+    save_ads_data(ads_data)
+    
+    status_str = "enabled" if ad["isActive"] else "disabled"
+    return jsonify({
+        "message": f"Ad {ad_id} {status_str} successfully",
+        "ad_id": ad_id,
+        "isActive": ad["isActive"]
+    }), 200
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -275,6 +466,7 @@ def health_check():
 
 
 @app.route('/generate', methods=['POST'])
+@require_user
 def generate_qr_code():
     """
     Generate QR code from URL
@@ -316,6 +508,7 @@ def generate_qr_code():
         qr_code_base64 = qr_service.generate_qr_code_base64(url)
         
         if qr_code_base64:
+            asyncio.run(log_qr_generation(url, request.user["id"]))
             return jsonify({
                 "success": True,
                 "url": url,
@@ -337,6 +530,7 @@ def generate_qr_code():
 
 
 @app.route('/generate/image', methods=['POST'])
+@require_user
 def generate_qr_code_image():
     """
     Generate QR code and return as image file
@@ -378,6 +572,7 @@ def generate_qr_code_image():
         qr_code_bytes = qr_service.generate_qr_code(url)
         
         if qr_code_bytes:
+            asyncio.run(log_qr_generation(url, request.user["id"]))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
@@ -398,6 +593,7 @@ def generate_qr_code_image():
 
 
 @app.route('/generate/<path:url>', methods=['GET'])
+@require_user
 def generate_qr_code_get(url):
     """
     Generate QR code from URL via GET request
@@ -424,6 +620,7 @@ def generate_qr_code_get(url):
         qr_code_bytes = qr_service.generate_qr_code(url)
         
         if qr_code_bytes:
+            asyncio.run(log_qr_generation(url, request.user["id"]))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
