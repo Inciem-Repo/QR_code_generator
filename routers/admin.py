@@ -55,7 +55,7 @@ async def admin_login(body: AdminLoginRequest):
     if body.username != ADMIN_USERNAME or body.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    token = create_access_token(data={"sub": body.username, "role": "admin"})
+    token = create_access_token(data={"sub": body.username, "name": "Admin", "role": "admin"})
     return {"token": token, "tokenType": "Bearer"}
 
 @router.post("/ads/toggle")

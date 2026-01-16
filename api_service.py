@@ -26,6 +26,49 @@ from utils.jwt_utils import create_access_token, decode_access_token
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 
+@app.after_request
+def add_standard_fields(response):
+    """
+    Standardize all JSON responses to include message, status, and status_code.
+    """
+    if response.is_json:
+        try:
+            data = response.get_json()
+            
+            # Prepare standard fields
+            status = "success" if response.status_code < 400 else "error"
+            status_code = response.status_code
+            message = "Operation successful"
+            
+            if isinstance(data, dict):
+                # Preserving existing message if present
+                if "message" in data:
+                    message = data.pop("message")
+                # If there's an 'error' field but no 'message', use it
+                elif "error" in data:
+                    message = data["error"]
+                
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    **data
+                }
+            else:
+                # For lists or other types
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    "data": data
+                }
+            
+            response.set_data(json.dumps(standard_response))
+        except Exception:
+            pass # Fallback to original
+            
+    return response
+
 # Paths and configuration
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
@@ -204,7 +247,7 @@ def admin_login():
     if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
         return jsonify({"error": "Unauthorized", "message": "Invalid credentials"}), 401
 
-    token = create_access_token(data={"sub": username, "role": "admin"})
+    token = create_access_token(data={"sub": username, "name": "Admin", "role": "admin"})
     return jsonify({"token": token, "tokenType": "Bearer"}), 200
 
 

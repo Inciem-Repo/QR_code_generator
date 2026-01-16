@@ -134,7 +134,12 @@ async def login(body: LoginRequest):
     await log_user_login(user["id"], user["email"], user.get("login_type", "email"))
 
     # Create access token
-    access_token = create_access_token(data={"sub": user["id"], "email": user["email"], "role": "user"})
+    access_token = create_access_token(data={
+        "sub": user["id"],
+        "name": user.get("name"),
+        "email": user["email"],
+        "role": user.get("role", "user")
+    })
 
     # Return access token and user info
     return {
@@ -147,7 +152,7 @@ async def login(body: LoginRequest):
             "email": user["email"],
             "profile_pic": user.get("profile_pic"),
             "login_type": user.get("login_type", "email"),
-            "role": "user",
+            "role": user.get("role", "user"),
             "created_at": user.get("created_at")
         }
     }
@@ -173,7 +178,7 @@ async def get_me(user: dict = Depends(get_current_user)):
         "email": user.get("email"),
         "profile_pic": user.get("profile_pic"),
         "login_type": user.get("login_type", "email"),
-        "role": "user",
+        "role": user.get("role", "user"),
         "created_at": user.get("created_at"),
         "email_verified": user.get("email_verified", False)
 }

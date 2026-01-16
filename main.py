@@ -1,7 +1,9 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from routers import auth, qr, admin
+import json
 
 
 from database import db
@@ -29,6 +31,121 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Standardize Success Responses Middleware
+@app.middleware("http")
+async def add_standard_response_fields(request: Request, call_next):
+    # Skip for documentation and health check if preferred, 
+    # but the request says "all" api responses.
+    
+    response = await call_next(request)
+    
+    # Only wrap JSON responses
+    content_type = response.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        # Extract body to modify it
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+            
+        try:
+            data = json.loads(body)
+            original_data = data
+            
+            # Prepare standard fields
+            status = "failed" if response.status_code >= 400 else "success"
+            status_code = response.status_code
+            
+            # Custom message logic
+            if response.status_code == 200 and ("/login" in request.url.path or "/auth/login" in request.url.path):
+                message = "login successful"
+            elif response.status_code == 401:
+                message = "email/password is wrong"
+            elif response.status_code >= 400:
+                message = "login failed"
+            else:
+                message = "Operation successful"
+            
+            if isinstance(data, dict):
+                # Preserving existing message if present, BUT override with our specific messages if it's login/failure
+                if "message" in data:
+                    message_from_data = data.pop("message")
+                    # If data already has a specific message, we can choose to keep it or use our standardized one.
+                    # The user requested specific strings.
+                
+                # If the dict is just an error/detail (common in FastAPI defaults)
+                if "detail" in data and len(data) == 1:
+                    detail = data.pop("detail")
+                    if response.status_code == 401:
+                        message = "email/password is wrong"
+                    else:
+                        message = str(detail)
+                
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    **data
+                }
+            else:
+                # If it's a list or other type, wrap it
+                standard_response = {
+                    "status": status,
+                    "status_code": status_code,
+                    "message": message,
+                    "data": data
+                }
+                
+            new_content = json.dumps(standard_response).encode("utf-8")
+            
+            # Create a new response as the original body_iterator is consumed
+            return JSONResponse(
+                content=standard_response,
+                status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+            )
+            
+        except Exception:
+            # If JSON parsing fails, return original response body
+            from fastapi.responses import Response
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=content_type
+            )
+            
+    return response
+
+# Standardize Error Responses
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    message = str(exc.detail) if hasattr(exc, "detail") else "No detail provided"
+    if exc.status_code == 401:
+        message = "email/password is wrong"
+    elif exc.status_code >= 400:
+        message = "login failed"
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": "failed",
+            "status_code": exc.status_code,
+            "message": message,
+        },
+    )
+
+@app.exception_handler(Exception)
+async def universal_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "status_code": 500,
+            "message": "Internal Server Error",
+            "detail": str(exc)
+        },
+    )
 
 # Include Routers
 app.include_router(auth.router, prefix="/auth")

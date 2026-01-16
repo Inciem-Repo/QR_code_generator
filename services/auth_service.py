@@ -17,7 +17,7 @@ async def find_user_by_id(user_id: str) -> Optional[Dict]:
         user["_id"] = str(user["_id"])
     return user
 
-async def create_user(name: str, email: str, profile_pic: Optional[str] = None, login_type: str = "email") -> Dict:
+async def create_user(name: str, email: str, profile_pic: Optional[str] = None, login_type: str = "email", role: str = "user") -> Dict:
     """Create a new user. Passwords are NO LONGER stored in the database."""
     user_id = str(uuid.uuid4())
     user = {
@@ -27,6 +27,7 @@ async def create_user(name: str, email: str, profile_pic: Optional[str] = None, 
         "email_verified": True,
         "profile_pic": profile_pic,
         "login_type": login_type,  # "email" or "google"
+        "role": role,
         "created_at": datetime.utcnow().isoformat()
     }
     await db.db.users.insert_one(user)
