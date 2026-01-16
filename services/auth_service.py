@@ -8,14 +8,27 @@ from database import db
 async def find_user_by_email(email: str) -> Optional[Dict]:
     user = await db.db.users.find_one({"email": email})
     if user:
+        user["mongo_id"] = str(user["_id"])
         user["_id"] = str(user["_id"])
     return user
 
 async def find_user_by_id(user_id: str) -> Optional[Dict]:
     user = await db.db.users.find_one({"id": user_id})
     if user:
+        user["mongo_id"] = str(user["_id"])
         user["_id"] = str(user["_id"])
     return user
+
+async def find_user_by_mongo_id(mongo_id: str) -> Optional[Dict]:
+    from bson.objectid import ObjectId
+    try:
+        user = await db.db.users.find_one({"_id": ObjectId(mongo_id)})
+        if user:
+            user["mongo_id"] = str(user["_id"])
+            user["_id"] = str(user["_id"])
+        return user
+    except Exception:
+        return None
 
 async def create_user(name: str, email: str, profile_pic: Optional[str] = None, login_type: str = "email", role: str = "user") -> Dict:
     """Create a new user. Passwords are NO LONGER stored in the database."""
@@ -31,7 +44,8 @@ async def create_user(name: str, email: str, profile_pic: Optional[str] = None, 
         "created_at": datetime.utcnow().isoformat()
     }
     await db.db.users.insert_one(user)
-    user["_id"] = str(user["id"])
+    user["mongo_id"] = str(user["_id"])
+    user["_id"] = str(user["_id"])
     return user
 
 async def create_google_user(name: str, email: str, profile_pic: Optional[str] = None) -> Dict:

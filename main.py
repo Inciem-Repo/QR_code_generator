@@ -57,27 +57,30 @@ async def add_standard_response_fields(request: Request, call_next):
             status_code = response.status_code
             
             # Custom message logic
-            if response.status_code == 200 and ("/login" in request.url.path or "/auth/login" in request.url.path):
+            is_login_path = "/login" in request.url.path or "/auth/login" in request.url.path
+            
+            if response.status_code == 200 and is_login_path:
                 message = "login successful"
             elif response.status_code == 401:
-                message = "email/password is wrong"
+                if is_login_path:
+                    message = "email/password is wrong"
+                else:
+                    message = "Unauthorized"
             elif response.status_code >= 400:
-                message = "login failed"
+                message = "login failed" if is_login_path else "An error occurred"
             else:
-                message = "Operation successful"
+                message = "successful"
             
             if isinstance(data, dict):
-                # Preserving existing message if present, BUT override with our specific messages if it's login/failure
+                # Preserving existing message if present
                 if "message" in data:
-                    message_from_data = data.pop("message")
-                    # If data already has a specific message, we can choose to keep it or use our standardized one.
-                    # The user requested specific strings.
+                    message = data.pop("message")
                 
                 # If the dict is just an error/detail (common in FastAPI defaults)
                 if "detail" in data and len(data) == 1:
                     detail = data.pop("detail")
                     if response.status_code == 401:
-                        message = "email/password is wrong"
+                        message = "email/password is wrong" if is_login_path else str(detail)
                     else:
                         message = str(detail)
                 
@@ -120,11 +123,15 @@ async def add_standard_response_fields(request: Request, call_next):
 # Standardize Error Responses
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    is_login_path = "/login" in request.url.path or "/auth/login" in request.url.path
     message = str(exc.detail) if hasattr(exc, "detail") else "No detail provided"
-    if exc.status_code == 401:
+    
+    # Only use specific login error message if we are actually on a login path
+    if exc.status_code == 401 and is_login_path:
         message = "email/password is wrong"
-    elif exc.status_code >= 400:
-        message = "login failed"
+    elif exc.status_code >= 400 and is_login_path and message == "login failed":
+        # Keep it as is or handle it
+        pass
 
     return JSONResponse(
         status_code=exc.status_code,
@@ -149,6 +156,7 @@ async def universal_exception_handler(request: Request, exc: Exception):
 
 # Include Routers
 app.include_router(auth.router, prefix="/auth")
+app.include_router(auth.user_router) # /user/{id} will be at root
 app.include_router(qr.router)
 app.include_router(admin.router)
 
@@ -170,6 +178,7 @@ if __name__ == "__main__":
     print("  POST /generate - Generate QR code (JSON)")
     print("  GET  /generate/{url} - Generate QR code (Image)")
     print("  POST /auth/send-otp - Request login OTP")
+    print("  POST /auth/verify-otp - Verify OTP only")
     print("  POST /auth/login - Login/Auto-register with OTP")
     print("\nDocumentation available at http://localhost:5000/docs")
     print("\n" + "=" * 50)

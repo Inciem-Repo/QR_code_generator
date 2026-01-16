@@ -38,7 +38,7 @@ def add_standard_fields(response):
             # Prepare standard fields
             status = "success" if response.status_code < 400 else "error"
             status_code = response.status_code
-            message = "Operation successful"
+            message = "successful"
             
             if isinstance(data, dict):
                 # Preserving existing message if present
@@ -247,7 +247,24 @@ def admin_login():
     if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
         return jsonify({"error": "Unauthorized", "message": "Invalid credentials"}), 401
 
-    token = create_access_token(data={"sub": username, "name": "Admin", "role": "admin"})
+    from services.auth_service import find_user_by_email, create_user
+    admin_user = asyncio.run(find_user_by_email(username))
+    
+    if not admin_user:
+        admin_user = asyncio.run(create_user(
+            name="Admin",
+            email=username,
+            role="admin"
+        ))
+    
+    mongo_id = admin_user.get("mongo_id")
+
+    token = create_access_token(data={
+        "sub": username,
+        "mongo_id": mongo_id,
+        "name": "Admin",
+        "role": "admin"
+    })
     return jsonify({"token": token, "tokenType": "Bearer"}), 200
 
 
@@ -276,7 +293,7 @@ def toggle_global_ads():
     }), 200
 
 
-# ---------------------- Ads CRUD ---------------------- #
+
 @app.route("/ads", methods=["POST"])
 @require_auth
 def create_ad():

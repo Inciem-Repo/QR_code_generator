@@ -55,7 +55,25 @@ async def admin_login(body: AdminLoginRequest):
     if body.username != ADMIN_USERNAME or body.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    token = create_access_token(data={"sub": body.username, "name": "Admin", "role": "admin"})
+    from services.auth_service import find_user_by_email, create_user
+    admin_user = await find_user_by_email(body.username)
+    
+    # If admin user record doesn't exist in DB, create it now to get a real mongo_id
+    if not admin_user:
+        admin_user = await create_user(
+            name="Admin",
+            email=body.username,
+            role="admin"
+        )
+    
+    mongo_id = admin_user.get("mongo_id")
+    
+    token = create_access_token(data={
+        "sub": body.username,
+        "mongo_id": mongo_id,
+        "name": "Admin",
+        "role": "admin"
+    })
     return {"token": token, "tokenType": "Bearer"}
 
 @router.post("/ads/toggle")
