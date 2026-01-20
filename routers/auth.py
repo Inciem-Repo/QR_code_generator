@@ -8,7 +8,9 @@ from services.auth_service import (
     save_otp,
     verify_otp,
     find_user_by_id,
-    log_user_login
+    log_user_login,
+    get_user_login_history,
+    create_google_user
 )
 from services.email_service import send_otp_email
 from utils.jwt_utils import create_access_token, decode_access_token
@@ -52,7 +54,10 @@ class LoginRequest(BaseModel):
     otp: str
 
 class GoogleAuthRequest(BaseModel):
-    token: str
+    name: str
+    email: EmailStr
+    profile_pic: Optional[str] = None
+    google_id: Optional[str] = None
 
 # =======================
 # Dependencies
@@ -88,6 +93,34 @@ async def get_current_user(
         raise
     except Exception:
         raise HTTPException(status_code=401, detail="Authentication failed")
+
+
+async def get_current_user_optional(
+    authorization: Optional[str] = Header(None),
+    auth_query: Optional[str] = Query(None, alias="authorization")
+) -> Optional[dict]:
+    token_str = authorization or auth_query
+    if not token_str:
+        return None
+    
+    try:
+        if token_str.lower().startswith("bearer "):
+            parts = token_str.split()
+            if len(parts) != 2:
+                return None
+            token = parts[1]
+        else:
+            token = token_str
+        
+        payload = decode_access_token(token)
+        if not payload or "sub" not in payload:
+             return None
+        
+        user_id = payload["sub"]
+        user = await find_user_by_id(user_id)
+        return user
+    except Exception:
+        return None
 
 
 # =======================
@@ -216,8 +249,52 @@ async def login(body: LoginRequest):
 
 @router.post("/google")
 async def google_auth(body: GoogleAuthRequest):
-    # Mock Google Auth validation
-    return {"message": "Google auth implementation remains the same (passwordless)"}
+    """Google Login: Accepts user details, creates/updates user, returns JWT."""
+    
+    # Check if user exists
+    user = await find_user_by_email(body.email)
+    
+    message = ""
+    if not user:
+        # Create new user
+        user = await create_google_user(
+            name=body.name,
+            email=body.email,
+            profile_pic=body.profile_pic
+        )
+        message = "Google user registered and logged in successfully"
+    else:
+        # User exists. 
+        message = "Logged in with Google successfully"
+        
+    # Log the login activity
+    await log_user_login(user["id"], user["email"], "google")
+
+    # Create access token
+    access_token = create_access_token(data={
+        "sub": user["id"],
+        "mongo_id": user.get("mongo_id"),
+        "name": user.get("name"),
+        "email": user["email"],
+        "role": user.get("role", "user")
+    })
+
+    # Return access token and user info
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "message": message,
+        "user": {
+            "id": user["id"],
+            "mongo_id": user.get("mongo_id"),
+            "name": user.get("name"),
+            "email": user["email"],
+            "profile_pic": user.get("profile_pic"),
+            "login_type": user.get("login_type", "google"),
+            "role": user.get("role", "user"),
+            "created_at": user.get("created_at")
+        }
+    }
 
 # =======================
 # Get User Info
@@ -237,6 +314,12 @@ async def get_me(user: dict = Depends(get_current_user)):
         "email_verified": user.get("email_verified", False)
     }
     return user_response
+
+@router.get("/login-history")
+async def get_login_history(user: dict = Depends(get_current_user)):
+    """Retrieve login history for the currently authenticated user."""
+    history = await get_user_login_history(user["id"])
+    return history
 
 @user_router.get("/user/{user_id}")
 async def get_user_route(user_id: str):

@@ -8,20 +8,14 @@ class AdsService:
         query = {}
         if placement:
             query["placement"] = placement
-        if only_active:
-            query["isActive"] = True
-            
+
         cursor = db.db.ads.find(query)
         ads = await cursor.to_list(length=100)
-        for ad in ads:
-            ad["_id"] = str(ad["_id"])
+        
         return ads
 
     @staticmethod
     async def create_ad(ad_data: Dict[str, Any]) -> Dict[str, Any]:
-        # Generate an integer ID for backward compatibility if needed, 
-        # but MongoDB's _id is usually enough. 
-        # We'll use an auto-incrementing-like approach for 'id' if required.
         
         last_ad = await db.db.ads.find_one(sort=[("id", -1)])
         new_id = (last_ad["id"] + 1) if last_ad and "id" in last_ad else 1

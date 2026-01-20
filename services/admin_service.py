@@ -28,3 +28,15 @@ class AdminService:
     async def is_ads_enabled() -> bool:
         settings = await AdminService.get_settings()
         return settings.get("ads_enabled", True)
+
+    @staticmethod
+    async def get_dashboard_stats() -> Dict[str, Any]:
+        total_qr_codes = await db.db.qr_history.count_documents({})
+        active_users = await db.db.users.count_documents({})
+        activated_ads = await db.db.ads.count_documents({"isActive": True})
+        
+        return {
+            "total_qr_codes": total_qr_codes,
+            "active_users": active_users,
+            "activated_ads": activated_ads
+        }
