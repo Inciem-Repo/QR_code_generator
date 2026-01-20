@@ -26,6 +26,7 @@ env/
 ENV/
 env.bak/
 venv.bak/
+.venv/
 
 # IDE
 .vscode/
@@ -44,4 +45,11 @@ test_qr_code.png
 *.jpg
 *.jpeg
 qrcode.png
+
+# Secrets
+.env
+
+# User content
+uploads/
+
 
