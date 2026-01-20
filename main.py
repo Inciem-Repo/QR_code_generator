@@ -154,9 +154,9 @@ async def universal_exception_handler(request: Request, exc: Exception):
         },
     )
 
-# Include Routers
+
 app.include_router(auth.router, prefix="/auth")
-app.include_router(auth.user_router) # /user/{id} will be at root
+app.include_router(auth.user_router)
 app.include_router(qr.router)
 app.include_router(admin.router)
 
@@ -173,14 +173,14 @@ if __name__ == "__main__":
     print("QR Code Generator - FastAPI Backend")
     print("=" * 50)
     print("\nStarting services...")
-    print("\nAPI Service running on http://localhost:5000")
+    print("\nAPI Service running on http://192.168.53.163:5000")
     print("\nAvailable Endpoints:")
     print("  POST /generate - Generate QR code (JSON)")
     print("  GET  /generate/{url} - Generate QR code (Image)")
     print("  POST /auth/send-otp - Request login OTP")
     print("  POST /auth/verify-otp - Verify OTP only")
     print("  POST /auth/login - Login/Auto-register with OTP")
-    print("\nDocumentation available at http://localhost:5000/docs")
+    print("\nDocumentation available at http://192.168.53.163:5000/docs")
     print("\n" + "=" * 50)
     
     uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=True)

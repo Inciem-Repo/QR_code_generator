@@ -4,8 +4,6 @@ from pydantic import BaseModel
 from typing import Optional
 from services.admin_service import AdminService
 from utils.jwt_utils import create_access_token, decode_access_token
-# Removed get_current_user dependency from auth to use custom admin check
-# from routers.auth import get_current_user
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -49,6 +47,11 @@ async def get_ads_status():
     is_enabled = await AdminService.is_ads_enabled()
     return {"ads_enabled": is_enabled}
 
+@router.get("/stats")
+async def get_stats(admin: dict = Depends(get_current_admin)):
+    """Get dashboard statistics: Total QR codes, Active users, Activated ads."""
+    return await AdminService.get_dashboard_stats()
+
 @router.post("/login")
 async def admin_login(body: AdminLoginRequest):
     """Admin login endpoint (matches Flask service behavior)."""
@@ -58,7 +61,6 @@ async def admin_login(body: AdminLoginRequest):
     from services.auth_service import find_user_by_email, create_user
     admin_user = await find_user_by_email(body.username)
     
-    # If admin user record doesn't exist in DB, create it now to get a real mongo_id
     if not admin_user:
         admin_user = await create_user(
             name="Admin",

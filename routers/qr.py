@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import base64
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Request, Depends, Header
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
@@ -9,12 +10,12 @@ from qr_service import QRCodeService
 from services.qr_history_service import log_qr_generation, get_user_qr_history
 from services.admin_service import AdminService
 from services.ads_service import AdsService
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_current_user_optional
 from routers.admin import get_current_admin
 
 router = APIRouter(tags=["QR & Ads"])
 
-# Paths and configuration
+
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 ADS_DATA_FILE = os.path.join(BASE_DIR, "ads_data.json")
@@ -34,7 +35,7 @@ VALID_PLACEMENTS = {
 
 qr_service = QRCodeService()
 
-# Helper Functions
+
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
@@ -47,7 +48,7 @@ def serialize_ad(ad: dict) -> dict:
         "isActive": bool(ad.get("isActive", True)),
     }
 
-# Models
+
 class QRRequest(BaseModel):
     url: str
 
@@ -59,7 +60,6 @@ class AdUpdate(BaseModel):
 class AdStatusUpdate(BaseModel):
     isActive: bool
 
-# Routes
 
 @router.get("/uploads/{filename}")
 async def serve_uploaded_file(filename: str):
@@ -106,7 +106,7 @@ async def create_ad(
 
 @router.get("/ads")
 async def list_ads(placement: Optional[str] = Query(None)):
-    # Check if ads are globally enabled
+   
     if not await AdminService.is_ads_enabled():
         return []
     
@@ -207,14 +207,17 @@ async def toggle_ad_status(ad_id: int, admin: dict = Depends(get_current_admin))
 
 # QR Generation Routes
 @router.post("/generate")
-async def generate_qr_code(request: QRRequest, user: dict = Depends(get_current_user)):
-    user_id = user["id"]
-    qr_code_base64 = qr_service.generate_qr_code_base64(request.url)
+async def generate_qr_code(request: Request, body: QRRequest, user: Optional[dict] = Depends(get_current_user_optional)):
+    qr_code_base64 = qr_service.generate_qr_code_base64(body.url)
     if qr_code_base64:
-        await log_qr_generation(request.url, user_id)
+        if user:
+            user_id = user["id"]
+            base_url = str(request.base_url).rstrip("/")
+            await log_qr_generation(body.url, qr_code_base64, user_id, base_url)
+            
         return {
             "success": True,
-            "url": request.url,
+            "url": body.url,
             "qr_code": qr_code_base64,
             "format": "PNG",
             "message": "QR code generated successfully"
@@ -222,32 +225,86 @@ async def generate_qr_code(request: QRRequest, user: dict = Depends(get_current_
     raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
 @router.post("/generate/image")
-async def generate_qr_code_image(request: QRRequest, user: dict = Depends(get_current_user)):
-    user_id = user["id"]
-    qr_code_bytes = qr_service.generate_qr_code(request.url)
+async def generate_qr_code_image(request: Request, body: QRRequest, user: Optional[dict] = Depends(get_current_user_optional)):
+    qr_code_bytes = qr_service.generate_qr_code(body.url)
     if qr_code_bytes:
-        await log_qr_generation(request.url, user_id)
+        if user:
+            user_id = user["id"]
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+            base_url = str(request.base_url).rstrip("/")
+            await log_qr_generation(body.url, qr_code_base64, user_id, base_url)
+            
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
     raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
 @router.get("/generate/{url:path}")
-async def generate_qr_code_get(url: str, user: dict = Depends(get_current_user)):
-    user_id = user["id"]
+async def generate_qr_code_get(request: Request, url: str, user: Optional[dict] = Depends(get_current_user_optional)):
     if not url.startswith('http://') and not url.startswith('https://'):
         url = 'https://' + url
     
     qr_code_bytes = qr_service.generate_qr_code(url)
     if qr_code_bytes:
-        await log_qr_generation(url, user_id)
+        if user:
+            user_id = user["id"]
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+            base_url = str(request.base_url).rstrip("/")
+            await log_qr_generation(url, qr_code_base64, user_id, base_url)
+            
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
     raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
+@router.post("/download")
+async def download_qr_code(body: QRRequest, user: dict = Depends(get_current_user)):
+    """Only authenticated users can download the QR code image."""
+    qr_code_bytes = qr_service.generate_qr_code(body.url)
+    if qr_code_bytes:
+        from io import BytesIO
+        filename = f"qr_{uuid.uuid4().hex[:8]}.png"
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+        return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png", headers=headers)
+    raise HTTPException(status_code=500, detail="Failed to generate QR code for download")
+
 @router.get("/history")
-async def get_history(user: dict = Depends(get_current_user)):
+async def get_history(request: Request, user: dict = Depends(get_current_user)):
     history = await get_user_qr_history(user["id"])
+    base_url = str(request.base_url).rstrip("/")
+    for entry in history:
+        # Provide the actual base64 image data in his preferred field name
+        if "qr_code" in entry:
+            entry["qr_image"] = entry["qr_code"]
+        
+        # Also provide the direct view URL
+        entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
     return history
+
+@router.get("/history/{history_id}/image")
+async def get_history_image(history_id: str):
+    from services.qr_history_service import get_qr_history_item_public
+    from io import BytesIO
+    
+    item = await get_qr_history_item_public(history_id)
+    if not item or "qr_code" not in item:
+        raise HTTPException(status_code=404, detail="QR history item or image not found")
+    
+    try:
+        qr_code_bytes = base64.b64decode(item["qr_code"])
+        return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to decode QR image")
+
+@router.delete("/history/{history_id}")
+async def delete_history(history_id: str, user: dict = Depends(get_current_user)):
+    from services.qr_history_service import delete_qr_history_item
+    
+    success = await delete_qr_history_item(history_id, user["id"])
+    if not success:
+        raise HTTPException(status_code=404, detail="History item not found or could not be deleted")
+    
+    return {"message": "History item deleted successfully", "id": history_id}
 
 @router.get("/health")
 async def health_check():

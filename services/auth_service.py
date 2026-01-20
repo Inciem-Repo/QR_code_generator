@@ -81,3 +81,11 @@ async def log_user_login(user_id: str, email: str, login_type: str):
     }
     await db.db.user_logs.insert_one(log_entry)
     print(f"Logged user login: {email} (ID: {user_id})")
+
+async def get_user_login_history(user_id: str):
+    """Retrieve login history for a specific user."""
+    cursor = db.db.user_logs.find({"user_id": user_id}).sort("timestamp", -1)
+    logs = await cursor.to_list(length=100)
+    for log in logs:
+        log["_id"] = str(log["_id"])
+    return logs
