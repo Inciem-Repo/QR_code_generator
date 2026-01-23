@@ -49,8 +49,17 @@ def serialize_ad(ad: dict) -> dict:
     }
 
 
+class QRCustomization(BaseModel):
+    fill_color: Optional[str] = "black"
+    back_color: Optional[str] = "white"
+    pattern: Optional[str] = "square"
+    error_correction: Optional[str] = "L"
+    logo: Optional[str] = None
+    logo_size: Optional[float] = 0.3
+
 class QRRequest(BaseModel):
     url: str
+    customization: Optional[QRCustomization] = None
 
 class AdUpdate(BaseModel):
     placement: Optional[str] = None
@@ -205,51 +214,118 @@ async def toggle_ad_status(ad_id: int, admin: dict = Depends(get_current_admin))
         "isActive": updated_ad["isActive"]
     }
 
-# QR Generation Routes
+
 @router.post("/generate")
 async def generate_qr_code(request: Request, body: QRRequest, user: Optional[dict] = Depends(get_current_user_optional)):
-    qr_code_base64 = qr_service.generate_qr_code_base64(body.url)
+    # Extract customization parameters
+    customization_dict = {}
+    if body.customization:
+        customization_dict = {
+            "fill_color": body.customization.fill_color,
+            "back_color": body.customization.back_color,
+            "pattern": body.customization.pattern,
+            "error_correction": body.customization.error_correction,
+            "logo": body.customization.logo,
+            "logo_size": body.customization.logo_size
+        }
+    
+    # Generate QR code with customization
+    qr_code_base64 = qr_service.generate_qr_code_base64(
+        url=body.url,
+        fill_color=customization_dict.get("fill_color", "black"),
+        back_color=customization_dict.get("back_color", "white"),
+        pattern=customization_dict.get("pattern", "square"),
+        error_correction=customization_dict.get("error_correction", "L"),
+        logo=customization_dict.get("logo"),
+        logo_size=customization_dict.get("logo_size", 0.3)
+    )
+    
     if qr_code_base64:
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(body.url, qr_code_base64, user_id, base_url)
+            await log_qr_generation(body.url, user_id, customization_dict if body.customization else None, base_url)
             
         return {
             "success": True,
             "url": body.url,
             "qr_code": qr_code_base64,
             "format": "PNG",
+            "customization": customization_dict if body.customization else None,
             "message": "QR code generated successfully"
         }
     raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
 @router.post("/generate/image")
 async def generate_qr_code_image(request: Request, body: QRRequest, user: Optional[dict] = Depends(get_current_user_optional)):
-    qr_code_bytes = qr_service.generate_qr_code(body.url)
+    # Extract customization parameters
+    customization_dict = {}
+    if body.customization:
+        customization_dict = {
+            "fill_color": body.customization.fill_color,
+            "back_color": body.customization.back_color,
+            "pattern": body.customization.pattern,
+            "error_correction": body.customization.error_correction,
+            "logo": body.customization.logo,
+            "logo_size": body.customization.logo_size
+        }
+    
+    # Generate QR code with customization
+    qr_code_bytes = qr_service.generate_qr_code(
+        url=body.url,
+        fill_color=customization_dict.get("fill_color", "black"),
+        back_color=customization_dict.get("back_color", "white"),
+        pattern=customization_dict.get("pattern", "square"),
+        error_correction=customization_dict.get("error_correction", "L"),
+        logo=customization_dict.get("logo"),
+        logo_size=customization_dict.get("logo_size", 0.3)
+    )
+    
     if qr_code_bytes:
         if user:
             user_id = user["id"]
-            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(body.url, qr_code_base64, user_id, base_url)
+            await log_qr_generation(body.url, user_id, customization_dict if body.customization else None, base_url)
             
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
     raise HTTPException(status_code=500, detail="Failed to generate QR code")
 
 @router.get("/generate/{url:path}")
-async def generate_qr_code_get(request: Request, url: str, user: Optional[dict] = Depends(get_current_user_optional)):
+async def generate_qr_code_get(
+    request: Request, 
+    url: str, 
+    fill_color: Optional[str] = Query("black"),
+    back_color: Optional[str] = Query("white"),
+    pattern: Optional[str] = Query("square"),
+    error_correction: Optional[str] = Query("L"),
+    user: Optional[dict] = Depends(get_current_user_optional)
+):
     if not url.startswith('http://') and not url.startswith('https://'):
         url = 'https://' + url
     
-    qr_code_bytes = qr_service.generate_qr_code(url)
+    # Build customization dict
+    customization_dict = {
+        "fill_color": fill_color,
+        "back_color": back_color,
+        "pattern": pattern,
+        "error_correction": error_correction
+    }
+    
+    # Generate QR code with customization
+    qr_code_bytes = qr_service.generate_qr_code(
+        url=url,
+        fill_color=fill_color,
+        back_color=back_color,
+        pattern=pattern,
+        error_correction=error_correction
+    )
+    
     if qr_code_bytes:
         if user:
             user_id = user["id"]
-            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(url, qr_code_base64, user_id, base_url)
+            await log_qr_generation(url, user_id, customization_dict, base_url)
             
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
@@ -258,7 +334,29 @@ async def generate_qr_code_get(request: Request, url: str, user: Optional[dict] 
 @router.post("/download")
 async def download_qr_code(body: QRRequest, user: dict = Depends(get_current_user)):
     """Only authenticated users can download the QR code image."""
-    qr_code_bytes = qr_service.generate_qr_code(body.url)
+    # Extract customization parameters
+    customization_dict = {}
+    if body.customization:
+        customization_dict = {
+            "fill_color": body.customization.fill_color,
+            "back_color": body.customization.back_color,
+            "pattern": body.customization.pattern,
+            "error_correction": body.customization.error_correction,
+            "logo": body.customization.logo,
+            "logo_size": body.customization.logo_size
+        }
+    
+    # Generate QR code with customization
+    qr_code_bytes = qr_service.generate_qr_code(
+        url=body.url,
+        fill_color=customization_dict.get("fill_color", "black"),
+        back_color=customization_dict.get("back_color", "white"),
+        pattern=customization_dict.get("pattern", "square"),
+        error_correction=customization_dict.get("error_correction", "L"),
+        logo=customization_dict.get("logo"),
+        logo_size=customization_dict.get("logo_size", 0.3)
+    )
+    
     if qr_code_bytes:
         from io import BytesIO
         filename = f"qr_{uuid.uuid4().hex[:8]}.png"

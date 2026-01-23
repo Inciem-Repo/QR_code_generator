@@ -2,9 +2,15 @@ from datetime import datetime
 from database import db
 from typing import Optional
 
-async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = None, base_url: Optional[str] = None):
+async def log_qr_generation(url: str, user_id: Optional[str] = None, customization: Optional[dict] = None, base_url: Optional[str] = None):
     """
-    Log a QR code generation event to MongoDB.
+    Log a QR code generation event to MongoDB with customization details.
+    
+    Args:
+        url: The URL encoded in the QR code
+        user_id: User ID who generated the QR code
+        customization: Dictionary containing customization options (colors, pattern, logo, etc.)
+        base_url: Base URL for generating image URLs
     """
     from bson.objectid import ObjectId
     history_id = ObjectId()
@@ -12,17 +18,27 @@ async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = Non
     log_entry = {
         "_id": history_id,
         "url": url,
-        "qr_code": qr_code,
         "user_id": user_id,
         "timestamp": datetime.utcnow(),
         "type": "qr_generation"
     }
     
+    # Add customization data if provided
+    if customization:
+        log_entry["customization"] = {
+            "fill_color": customization.get("fill_color", "black"),
+            "back_color": customization.get("back_color", "white"),
+            "pattern": customization.get("pattern", "square"),
+            "error_correction": customization.get("error_correction", "L"),
+            "has_logo": bool(customization.get("logo")),
+            "logo_size": customization.get("logo_size", 0.3) if customization.get("logo") else None
+        }
+    
     if base_url:
         log_entry["qr_image_url"] = f"{base_url}/history/{str(history_id)}/image"
         
     await db.db.qr_history.insert_one(log_entry)
-    print(f"Logged QR generation: {url} (User: {user_id})")
+    print(f"Logged QR generation: {url} (User: {user_id}, Customized: {bool(customization)})")
 
 async def get_user_qr_history(user_id: str):
     """
