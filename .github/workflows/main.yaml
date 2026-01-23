@@ -1,0 +1,64 @@
+name: edubot bot CI/CD on Ubuntu
+
+on:
+  push:
+    branches: [ main ] 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Test SSH Connection
+      uses: appleboy/ssh-action@master
+      with:
+        host: "76.13.17.46"
+        username: "ubuntu"
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          echo "SSH connection test successful"
+          sudo rm -rf /var/www/html/qr-generator/backend
+          
+    - name: Stop Pm2 Process
+      uses: appleboy/ssh-action@master
+      with:
+        host: "76.13.17.46"
+        username: "ubuntu"
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # pm2 stop edubot-api
+    
+    - name: Deploy Application to AWS EC2
+      uses: appleboy/scp-action@master
+      with:
+        host: "76.13.17.46"
+        username: "ubuntu"
+        key: ${{ secrets.EC2_SSH_KEY }}
+        source: "./"
+        target: "/var/www/html/qr-generator/backend"
+        overwrite: true
+        rm: true
+
+    - name: Copy .env File to Deployment Directory
+      uses: appleboy/ssh-action@master
+      with:
+        host: "76.13.17.46"
+        username: "ubuntu"
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          sudo cp /home/ubuntu/secret/qr-generator/backend/.env /var/www/html/qr-generator/backend/.env     
+
+    
+    - name: Install Dependencies and Restart Application
+      uses: appleboy/ssh-action@master
+      with:
+        host: "76.13.17.46"
+        username: "ubuntu"
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          cd /var/www/html/qr-generator/backend
+          pip install -r requirements.txt
+          # pm2 start edubot-api
