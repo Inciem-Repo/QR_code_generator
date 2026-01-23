@@ -78,7 +78,7 @@ async def get_current_user(
                 raise HTTPException(status_code=401, detail="Invalid authorization format")
             token = parts[1]
         else:
-            token = token_str  # Accept direct token (common in query params)
+            token = token_str  
         
         payload = decode_access_token(token)
         if not payload or "sub" not in payload:
@@ -140,7 +140,7 @@ async def send_otp(body: SendOTPRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
     
-    print(f"✅ OTP sent to {body.email}: {otp}")  # dev only
+    print(f"✅ OTP sent to {body.email}: {otp}")  
 
     return {"message": "OTP sent to your email. Please check your inbox."}
 
@@ -153,10 +153,10 @@ async def verify_otp_route(body: VerifyOTPRequest):
     
     user = await find_user_by_email(body.email)
     
-    # Auto-register if user doesn't exist
+    
     if not user:
         user = await create_user(
-            name=body.email.split('@')[0], # Use part of email as default name
+            name=body.email.split('@')[0], 
             email=body.email,
             login_type="email"
         )
@@ -164,10 +164,10 @@ async def verify_otp_route(body: VerifyOTPRequest):
     else:
         message = "OTP verified successfully"
     
-    # Log the login activity
+    
     await log_user_login(user["id"], user["email"], user.get("login_type", "email"))
 
-    # Create access token
+    
     access_token = create_access_token(data={
         "sub": user["id"],
         "mongo_id": user.get("mongo_id"),
@@ -176,7 +176,7 @@ async def verify_otp_route(body: VerifyOTPRequest):
         "role": user.get("role", "user")
     })
 
-    # Return access token and user info
+   
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -197,16 +197,16 @@ async def verify_otp_route(body: VerifyOTPRequest):
 @router.post("/login")
 async def login(body: LoginRequest):
     """Verify OTP and login. Creates a new user if one doesn't exist."""
-    # Verify OTP
+    
     if not await verify_otp(body.email, body.otp):
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
     
     user = await find_user_by_email(body.email)
     
-    # Auto-register if user doesn't exist
+    
     if not user:
         user = await create_user(
-            name=body.email.split('@')[0], # Use part of email as default name
+            name=body.email.split('@')[0], 
             email=body.email,
             login_type="email"
         )
@@ -214,10 +214,10 @@ async def login(body: LoginRequest):
     else:
         message = "Logged in successfully"
     
-    # Log the login activity
+   
     await log_user_login(user["id"], user["email"], user.get("login_type", "email"))
 
-    # Create access token
+    
     access_token = create_access_token(data={
         "sub": user["id"],
         "mongo_id": user.get("mongo_id"),
@@ -226,7 +226,7 @@ async def login(body: LoginRequest):
         "role": user.get("role", "user")
     })
 
-    # Return access token and user info
+    
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -251,12 +251,12 @@ async def login(body: LoginRequest):
 async def google_auth(body: GoogleAuthRequest):
     """Google Login: Accepts user details, creates/updates user, returns JWT."""
     
-    # Check if user exists
+    
     user = await find_user_by_email(body.email)
     
     message = ""
     if not user:
-        # Create new user
+       
         user = await create_google_user(
             name=body.name,
             email=body.email,
@@ -264,13 +264,13 @@ async def google_auth(body: GoogleAuthRequest):
         )
         message = "Google user registered and logged in successfully"
     else:
-        # User exists. 
+         
         message = "Logged in with Google successfully"
         
-    # Log the login activity
+   
     await log_user_login(user["id"], user["email"], "google")
 
-    # Create access token
+    
     access_token = create_access_token(data={
         "sub": user["id"],
         "mongo_id": user.get("mongo_id"),
@@ -279,7 +279,7 @@ async def google_auth(body: GoogleAuthRequest):
         "role": user.get("role", "user")
     })
 
-    # Return access token and user info
+    
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -326,10 +326,10 @@ async def get_user_route(user_id: str):
     """Get user information by either UUID or MongoDB ID."""
     from services.auth_service import find_user_by_mongo_id, find_user_by_id
     
-    # Try looking up by MongoDB ObjectId hex string
+    
     user = await find_user_by_mongo_id(user_id)
     
-    # If not found, try looking up by UUID
+    
     if not user:
         user = await find_user_by_id(user_id)
         

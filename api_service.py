@@ -469,11 +469,19 @@ def health_check():
 @require_user
 def generate_qr_code():
     """
-    Generate QR code from URL
+    Generate QR code from URL with customization options
     
     Request body (JSON):
         {
-            "url": "https://www.example.com"
+            "url": "https://www.example.com",
+            "customization": {  // Optional
+                "fill_color": "#000000",
+                "back_color": "#FFFFFF",
+                "pattern": "rounded",
+                "error_correction": "H",
+                "logo": "base64_encoded_image",
+                "logo_size": 0.3
+            }
         }
     
     Returns:
@@ -504,16 +512,35 @@ def generate_qr_code():
                 "message": "Please provide a valid URL (e.g., https://www.example.com)"
             }), 400
         
-        # Generate QR code
-        qr_code_base64 = qr_service.generate_qr_code_base64(url)
+        # Extract customization options (optional)
+        customization = data.get('customization', {})
+        fill_color = customization.get('fill_color', 'black')
+        back_color = customization.get('back_color', 'white')
+        pattern = customization.get('pattern', 'square')
+        error_correction = customization.get('error_correction', 'L')
+        logo = customization.get('logo')
+        logo_size = customization.get('logo_size', 0.3)
+        
+        # Generate QR code with customization
+        qr_code_base64 = qr_service.generate_qr_code_base64(
+            url=url,
+            fill_color=fill_color,
+            back_color=back_color,
+            pattern=pattern,
+            error_correction=error_correction,
+            logo=logo,
+            logo_size=logo_size
+        )
         
         if qr_code_base64:
-            asyncio.run(log_qr_generation(url, request.user["id"]))
+            # Log QR generation with customization info
+            asyncio.run(log_qr_generation(url, request.user["id"], customization))
             return jsonify({
                 "success": True,
                 "url": url,
                 "qr_code": qr_code_base64,
                 "format": "PNG",
+                "customization": customization,
                 "message": "QR code generated successfully"
             }), 200
         else:
@@ -533,11 +560,18 @@ def generate_qr_code():
 @require_user
 def generate_qr_code_image():
     """
-    Generate QR code and return as image file
+    Generate QR code and return as image file with customization options
     
     Request body (JSON):
         {
-            "url": "https://www.example.com"
+            "url": "https://www.example.com",
+            "customization": {  // Optional
+                "fill_color": "#000000",
+                "back_color": "#FFFFFF",
+                "pattern": "rounded",
+                "logo": "base64_encoded_image",
+                "logo_size": 0.3
+            }
         }
     
     Returns:
@@ -568,11 +602,29 @@ def generate_qr_code_image():
                 "message": "Please provide a valid URL (e.g., https://www.example.com)"
             }), 400
         
-        # Generate QR code
-        qr_code_bytes = qr_service.generate_qr_code(url)
+        # Extract customization options (optional)
+        customization = data.get('customization', {})
+        fill_color = customization.get('fill_color', 'black')
+        back_color = customization.get('back_color', 'white')
+        pattern = customization.get('pattern', 'square')
+        error_correction = customization.get('error_correction', 'L')
+        logo = customization.get('logo')
+        logo_size = customization.get('logo_size', 0.3)
+        
+        # Generate QR code with customization
+        qr_code_bytes = qr_service.generate_qr_code(
+            url=url,
+            fill_color=fill_color,
+            back_color=back_color,
+            pattern=pattern,
+            error_correction=error_correction,
+            logo=logo,
+            logo_size=logo_size
+        )
         
         if qr_code_bytes:
-            asyncio.run(log_qr_generation(url, request.user["id"]))
+            # Log QR generation with customization info
+            asyncio.run(log_qr_generation(url, request.user["id"], customization))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
@@ -596,10 +648,16 @@ def generate_qr_code_image():
 @require_user
 def generate_qr_code_get(url):
     """
-    Generate QR code from URL via GET request
+    Generate QR code from URL via GET request with customization via query params
     
     Args:
         url: URL to encode (passed as path parameter)
+    
+    Query Parameters (all optional):
+        fill_color: Hex color for QR code foreground (e.g., %23FF0000 for red)
+        back_color: Hex color for QR code background
+        pattern: Pattern style (square, rounded, dots, vertical_bars, horizontal_bars)
+        error_correction: Error correction level (L, M, Q, H)
     
     Returns:
         PNG image file
@@ -616,11 +674,37 @@ def generate_qr_code_get(url):
                 "message": "Please provide a valid URL"
             }), 400
         
-        # Generate QR code
-        qr_code_bytes = qr_service.generate_qr_code(url)
+        # Extract customization from query parameters
+        fill_color = request.args.get('fill_color', 'black')
+        back_color = request.args.get('back_color', 'white')
+        pattern = request.args.get('pattern', 'square')
+        error_correction = request.args.get('error_correction', 'L')
+        
+        # URL decode colors if they start with %23 (encoded #)
+        if fill_color.startswith('%23'):
+            fill_color = '#' + fill_color[3:]
+        if back_color.startswith('%23'):
+            back_color = '#' + back_color[3:]
+        
+        # Build customization dict for logging
+        customization = {
+            'fill_color': fill_color,
+            'back_color': back_color,
+            'pattern': pattern,
+            'error_correction': error_correction
+        }
+        
+        # Generate QR code with customization
+        qr_code_bytes = qr_service.generate_qr_code(
+            url=url,
+            fill_color=fill_color,
+            back_color=back_color,
+            pattern=pattern,
+            error_correction=error_correction
+        )
         
         if qr_code_bytes:
-            asyncio.run(log_qr_generation(url, request.user["id"]))
+            asyncio.run(log_qr_generation(url, request.user["id"], customization))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
