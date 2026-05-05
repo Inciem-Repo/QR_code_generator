@@ -75,45 +75,25 @@ async def serve_uploaded_file(filename: str):
     return FileResponse(file_path)
 
 @router.post("/ads")
-async def create_ad(request: Request, admin: dict = Depends(get_current_admin)):
-    content_type = request.headers.get("content-type", "").lower()
-    placement = None
-    redirectUrl = None
-    isActive = True
-    image = None
-
-    if content_type.startswith("application/json"):
-        data = await request.json()
-        placement = data.get("placement")
-        redirectUrl = data.get("redirectUrl")
-        isActive = data.get("isActive", True)
-    else:
-        form = await request.form()
-        placement = form.get("placement")
-        redirectUrl = form.get("redirectUrl")
-        isActive = form.get("isActive", True)
-        image = form.get("image")
-
-    if isinstance(isActive, str):
-        isActive = isActive.lower() not in {"false", "0", "no", "off"}
-
-    if not placement or placement not in VALID_PLACEMENTS:
+async def create_ad(
+    request: Request,
+    placement: str = Form(...),
+    redirectUrl: str = Form(None),
+    isActive: bool = Form(True),
+    image: UploadFile = File(...),
+    admin: dict = Depends(get_current_admin)
+):
+    if placement not in VALID_PLACEMENTS:
         raise HTTPException(status_code=400, detail="Invalid placement")
-
-    if not image or not getattr(image, "filename", None):
-        raise HTTPException(status_code=400, detail="Image is required for ad creation")
-
+    
     if not allowed_file(image.filename):
         raise HTTPException(status_code=400, detail=f"Invalid image type. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
 
     filename = f"{uuid.uuid4().hex}_{image.filename}"
     image_path = os.path.join(config.UPLOAD_FOLDER, filename)
     
-    content = await image.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Uploaded image is empty")
-
     with open(image_path, "wb") as buffer:
+        content = await image.read()
         buffer.write(content)
     
     base_url = str(request.base_url).rstrip("/")
@@ -156,45 +136,32 @@ async def get_ad(ad_id: int):
     return serialize_ad(ad)
 
 @router.put("/ads/{ad_id}")
-async def update_ad(ad_id: int, request: Request, admin: dict = Depends(get_current_admin)):
+async def update_ad(
+    ad_id: int,
+    request: Request,
+    placement: Optional[str] = Form(None),
+    redirectUrl: Optional[str] = Form(None),
+    isActive: Optional[bool] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    admin: dict = Depends(get_current_admin)
+):
     ad = await AdsService.get_ad_by_id(ad_id)
     if not ad:
         raise HTTPException(status_code=404, detail="Ad not found")
 
-    content_type = request.headers.get("content-type", "").lower()
-    placement = None
-    redirectUrl = None
-    isActive = None
-    image = None
-
-    if content_type.startswith("application/json"):
-        data = await request.json()
-        placement = data.get("placement")
-        redirectUrl = data.get("redirectUrl")
-        isActive = data.get("isActive")
-    else:
-        form = await request.form()
-        placement = form.get("placement")
-        redirectUrl = form.get("redirectUrl")
-        isActive = form.get("isActive")
-        image = form.get("image")
-
-    if isinstance(isActive, str):
-        isActive = isActive.lower() not in {"false", "0", "no", "off"}
-
     update_data = {}
-    if placement is not None:
+    if placement:
         if placement not in VALID_PLACEMENTS:
             raise HTTPException(status_code=400, detail="Invalid placement")
         update_data["placement"] = placement
     
-    if redirectUrl is not None:
+    if redirectUrl:
         update_data["redirectUrl"] = redirectUrl
     
     if isActive is not None:
         update_data["isActive"] = isActive
 
-    if image and getattr(image, "filename", None):
+    if image and image.filename:
         if not allowed_file(image.filename):
             raise HTTPException(status_code=400, detail="Invalid image type")
         
@@ -203,17 +170,16 @@ async def update_ad(ad_id: int, request: Request, admin: dict = Depends(get_curr
         
         content = await image.read()
         if not content:
-            raise HTTPException(status_code=400, detail="Uploaded image is empty")
+             raise HTTPException(status_code=400, detail="Uploaded image is empty")
 
         with open(image_path, "wb") as buffer:
             buffer.write(content)
-        
+            
+        # Cleanup old image ONLY after successful save
         old_path = ad.get("imagePath")
         if old_path and os.path.exists(old_path):
-            try:
-                os.remove(old_path)
-            except:
-                pass
+            try: os.remove(old_path)
+            except: pass
             
         update_data["imagePath"] = image_path
         base_url = str(request.base_url).rstrip("/")
@@ -434,23 +400,18 @@ async def get_history(request: Request, user: dict = Depends(get_current_user)):
     history = await get_user_qr_history(user["id"])
     base_url = str(request.base_url).rstrip("/")
     for entry in history:
-        # Provide the actual base64 image data in the preferred field names
+        # Provide the actual base64 image data in his preferred field name
         if "qr_code" in entry:
             qr_data = entry["qr_code"]
+            # Ensure it's a string and add prefix
             if isinstance(qr_data, str):
-                if qr_data.startswith("data:"):
-                    entry["qr_image"] = qr_data
-                    entry["qr_code"] = qr_data.split(",", 1)[1] if "," in qr_data else qr_data
-                else:
+                if not qr_data.startswith("data:"):
                     entry["qr_image"] = f"data:image/png;base64,{qr_data}"
-                    entry["qr_code"] = qr_data
+                else:
+                    entry["qr_image"] = qr_data
             else:
                 entry["qr_image"] = None
-                entry["qr_code"] = None
-        else:
-            entry["qr_image"] = None
-            entry["qr_code"] = None
-
+        
         # Also provide the direct view URL
         entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
     return history
