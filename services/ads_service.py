@@ -8,26 +8,17 @@ class AdsService:
         query = {}
         if placement:
             query["placement"] = placement
-        
-        if only_active:
-            query["isActive"] = True
 
         cursor = db.db.ads.find(query)
         ads = await cursor.to_list(length=100)
         
-        for ad in ads:
-            ad["_id"] = str(ad["_id"])
-            
         return ads
 
     @staticmethod
     async def create_ad(ad_data: Dict[str, Any]) -> Dict[str, Any]:
         
         last_ad = await db.db.ads.find_one(sort=[("id", -1)])
-        try:
-            new_id = (int(last_ad["id"]) + 1) if last_ad and "id" in last_ad else 1
-        except (ValueError, TypeError, KeyError):
-            new_id = 1
+        new_id = (last_ad["id"] + 1) if last_ad and "id" in last_ad else 1
         
         ad_data["id"] = new_id
         ad_data["created_at"] = datetime.utcnow()
@@ -45,18 +36,12 @@ class AdsService:
 
     @staticmethod
     async def update_ad(ad_id: int, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not update_data:
-            return await AdsService.get_ad_by_id(ad_id)
-            
-        await db.db.ads.update_one(
-            {"$or": [{"id": ad_id}, {"id": str(ad_id)}]}, 
-            {"$set": update_data}
-        )
+        await db.db.ads.update_one({"id": ad_id}, {"$set": update_data})
         return await AdsService.get_ad_by_id(ad_id)
 
     @staticmethod
     async def delete_ad(ad_id: int) -> bool:
-        result = await db.db.ads.delete_one({"$or": [{"id": ad_id}, {"id": str(ad_id)}]})
+        result = await db.db.ads.delete_one({"id": ad_id})
         return result.deleted_count > 0
 
     @staticmethod
