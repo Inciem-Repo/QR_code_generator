@@ -168,11 +168,14 @@ async def update_ad(
         filename = f"{uuid.uuid4().hex}_{image.filename}"
         image_path = os.path.join(config.UPLOAD_FOLDER, filename)
         
+        content = await image.read()
+        if not content:
+             raise HTTPException(status_code=400, detail="Uploaded image is empty")
+
         with open(image_path, "wb") as buffer:
-            content = await image.read()
             buffer.write(content)
             
-        # Cleanup old image
+        # Cleanup old image ONLY after successful save
         old_path = ad.get("imagePath")
         if old_path and os.path.exists(old_path):
             try: os.remove(old_path)
@@ -400,11 +403,14 @@ async def get_history(request: Request, user: dict = Depends(get_current_user)):
         # Provide the actual base64 image data in his preferred field name
         if "qr_code" in entry:
             qr_data = entry["qr_code"]
-            # Add data URL prefix if not already present
-            if not qr_data.startswith("data:"):
-                entry["qr_image"] = f"data:image/png;base64,{qr_data}"
+            # Ensure it's a string and add prefix
+            if isinstance(qr_data, str):
+                if not qr_data.startswith("data:"):
+                    entry["qr_image"] = f"data:image/png;base64,{qr_data}"
+                else:
+                    entry["qr_image"] = qr_data
             else:
-                entry["qr_image"] = qr_data
+                entry["qr_image"] = None
         
         # Also provide the direct view URL
         entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
