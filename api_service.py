@@ -378,9 +378,19 @@ def update_ad(ad_id: int):
     if image and image.filename:
         if not allowed_file(image.filename):
             return jsonify({"error": "Invalid image type", "message": f"Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}), 400
+        
         filename = f"{uuid.uuid4().hex}_{secure_filename(image.filename)}"
         image_path = os.path.join(UPLOAD_FOLDER, filename)
-        image.save(image_path)
+        
+        # Read content and write
+        content = image.read()
+        if not content:
+            return jsonify({"error": "Empty file", "message": "Uploaded image is empty"}), 400
+            
+        with open(image_path, "wb") as f:
+            f.write(content)
+            
+        # ONLY delete old image after successful write
         old_path = ad.get("imagePath")
         if old_path and os.path.exists(old_path):
             try:
@@ -528,7 +538,7 @@ def generate_qr_code():
         
         if qr_code_base64:
             # Log QR generation with customization info
-            asyncio.run(log_qr_generation(url, request.user["id"], customization))
+            asyncio.run(log_qr_generation(url, qr_code_base64, request.user["id"], customization))
             return jsonify({
                 "success": True,
                 "url": url,
@@ -617,8 +627,11 @@ def generate_qr_code_image():
         )
         
         if qr_code_bytes:
+            # Generate base64 for logging
+            import base64
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             # Log QR generation with customization info
-            asyncio.run(log_qr_generation(url, request.user["id"], customization))
+            asyncio.run(log_qr_generation(url, qr_code_base64, request.user["id"], customization))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
