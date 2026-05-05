@@ -3,6 +3,7 @@ import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
+from config import config
 
 
 def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
@@ -100,6 +101,8 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
     """
 
 
+from config import config
+
 def send_email(to_email: str, subject: str, body: str, is_html: bool = False) -> bool:
     """
     Send email using SMTP (Gmail)
@@ -114,11 +117,11 @@ def send_email(to_email: str, subject: str, body: str, is_html: bool = False) ->
         bool: True if email sent successfully, False otherwise
     """
     try:
-        # Get SMTP credentials from environment
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        smtp_username = os.getenv("SMTP_USERNAME")
-        smtp_password = os.getenv("SMTP_PASSWORD")
+        # Get SMTP credentials from config
+        smtp_server = config.SMTP_SERVER
+        smtp_port = config.SMTP_PORT
+        smtp_username = config.SMTP_USERNAME
+        smtp_password = config.SMTP_PASSWORD
         
         if not smtp_username or not smtp_password:
             print("❌ SMTP credentials not configured in .env file")

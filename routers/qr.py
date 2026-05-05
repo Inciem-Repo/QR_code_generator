@@ -301,7 +301,6 @@ async def generate_qr_code_image(request: Request, body: QRRequest, user: Option
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            import base64
             qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None, base_url)
             
@@ -343,7 +342,6 @@ async def generate_qr_code_get(
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            import base64
             qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             await log_qr_generation(url, qr_code_base64, user_id, customization_dict, base_url)
             
@@ -380,10 +378,6 @@ async def download_qr_code(body: QRRequest, user: dict = Depends(get_current_use
     if qr_code_bytes:
         # Log generation for history
         user_id = user["id"]
-        # In a real app we might want to get the base_url from the request if possible, 
-        # but here we can just pass None or try to get it if we had the request object.
-        # Since we don't have request object in download_qr_code parameters, we'll pass None for base_url
-        import base64
         qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
         await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None)
 

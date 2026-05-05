@@ -67,6 +67,10 @@ class QRCodeService:
         'brown': (165, 42, 42),
         'gray': (128, 128, 128),
         'grey': (128, 128, 128),
+        'silver': (192, 192, 192),
+        'gold': (255, 215, 0),
+        'navy': (0, 0, 128),
+        'teal': (0, 128, 128),
     }
     
     
@@ -76,7 +80,11 @@ class QRCodeService:
         if len(hex_color) == 3:
             # Convert #RGB to #RRGGBB
             hex_color = ''.join([c*2 for c in hex_color])
-        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        
+        try:
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        except ValueError:
+            raise ValueError(f"Invalid hexadecimal color: {hex_color}")
     
     def _parse_color(self, color: Union[str, Tuple[int, int, int]]) -> Tuple[int, int, int]:
         """
@@ -90,16 +98,26 @@ class QRCodeService:
         """
         if isinstance(color, str):
             # Convert color names to RGB tuples
-            color_lower = color.lower()
+            color_lower = color.lower().strip()
             if color_lower in self.COLOR_MAP:
                 return self.COLOR_MAP[color_lower]
             
             # Convert hex color to RGB
-            if not color.startswith('#'):
-                color = f'#{color}'
-            if len(color) not in [4, 7]:  # #RGB or #RRGGBB
-                raise ValueError(f"Invalid hex color format: {color}")
-            return self._hex_to_rgb(color)
+            # Check if it looks like a hex color (starts with # or is 3/6 chars long)
+            is_hex = color_lower.startswith('#') or len(color_lower) in [3, 6]
+            
+            # If it starts with #, it MUST be hex
+            if color_lower.startswith('#'):
+                return self._hex_to_rgb(color_lower)
+            
+            # If it doesn't start with #, but is 3 or 6 chars, try as hex
+            if len(color_lower) in [3, 6]:
+                try:
+                    return self._hex_to_rgb(color_lower)
+                except ValueError:
+                    pass # Not a valid hex, fall through to error
+            
+            raise ValueError(f"Color '{color}' is not a recognized color name or valid hex code")
         elif isinstance(color, (list, tuple)) and len(color) == 3:
             # Validate RGB tuple
             if not all(0 <= c <= 255 for c in color):

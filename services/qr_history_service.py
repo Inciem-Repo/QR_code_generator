@@ -2,12 +2,13 @@ from datetime import datetime
 from database import db
 from typing import Optional
 
-async def log_qr_generation(url: str, user_id: Optional[str] = None, customization: Optional[dict] = None, base_url: Optional[str] = None):
+async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = None, customization: Optional[dict] = None, base_url: Optional[str] = None):
     """
     Log a QR code generation event to MongoDB with customization details.
     
     Args:
         url: The URL encoded in the QR code
+        qr_code: Base64 encoded QR code image data
         user_id: User ID who generated the QR code
         customization: Dictionary containing customization options (colors, pattern, logo, etc.)
         base_url: Base URL for generating image URLs
@@ -18,6 +19,7 @@ async def log_qr_generation(url: str, user_id: Optional[str] = None, customizati
     log_entry = {
         "_id": history_id,
         "url": url,
+        "qr_code": qr_code,
         "user_id": user_id,
         "timestamp": datetime.utcnow(),
         "type": "qr_generation"
