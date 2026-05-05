@@ -16,10 +16,7 @@ from routers.admin import get_current_admin
 router = APIRouter(tags=["QR & Ads"])
 
 
-BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-ADS_DATA_FILE = os.path.join(BASE_DIR, "ads_data.json")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+from config import config
 
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 VALID_PLACEMENTS = {
@@ -72,7 +69,7 @@ class AdStatusUpdate(BaseModel):
 
 @router.get("/uploads/{filename}")
 async def serve_uploaded_file(filename: str):
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    file_path = os.path.join(config.UPLOAD_FOLDER, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path)
@@ -93,7 +90,7 @@ async def create_ad(
         raise HTTPException(status_code=400, detail=f"Invalid image type. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
 
     filename = f"{uuid.uuid4().hex}_{image.filename}"
-    image_path = os.path.join(UPLOAD_FOLDER, filename)
+    image_path = os.path.join(config.UPLOAD_FOLDER, filename)
     
     with open(image_path, "wb") as buffer:
         content = await image.read()
@@ -114,13 +111,29 @@ async def create_ad(
     return serialize_ad(saved_ad)
 
 @router.get("/ads")
-async def list_ads(placement: Optional[str] = Query(None)):
+async def list_ads(
+    placement: Optional[str] = Query(None), 
+    all_ads: bool = Query(False),
+    admin: Optional[dict] = Depends(get_current_user_optional)
+):
    
     if not await AdminService.is_ads_enabled():
         return []
     
-    ads = await AdsService.get_all_ads(placement=placement, only_active=True)
+    # Only admins can see inactive ads, or if all_ads is False we only show active ones
+    only_active = True
+    if all_ads and admin and admin.get("role") == "admin":
+        only_active = False
+        
+    ads = await AdsService.get_all_ads(placement=placement, only_active=only_active)
     return [serialize_ad(ad) for ad in ads]
+
+@router.get("/ads/{ad_id}")
+async def get_ad(ad_id: int):
+    ad = await AdsService.get_ad_by_id(ad_id)
+    if not ad:
+        raise HTTPException(status_code=404, detail="Ad not found")
+    return serialize_ad(ad)
 
 @router.put("/ads/{ad_id}")
 async def update_ad(
@@ -153,7 +166,7 @@ async def update_ad(
             raise HTTPException(status_code=400, detail="Invalid image type")
         
         filename = f"{uuid.uuid4().hex}_{image.filename}"
-        image_path = os.path.join(UPLOAD_FOLDER, filename)
+        image_path = os.path.join(config.UPLOAD_FOLDER, filename)
         
         with open(image_path, "wb") as buffer:
             content = await image.read()
@@ -244,7 +257,7 @@ async def generate_qr_code(request: Request, body: QRRequest, user: Optional[dic
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(body.url, user_id, customization_dict if body.customization else None, base_url)
+            await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None, base_url)
             
         return {
             "success": True,
@@ -285,7 +298,9 @@ async def generate_qr_code_image(request: Request, body: QRRequest, user: Option
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(body.url, user_id, customization_dict if body.customization else None, base_url)
+            import base64
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+            await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None, base_url)
             
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
@@ -325,7 +340,9 @@ async def generate_qr_code_get(
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            await log_qr_generation(url, user_id, customization_dict, base_url)
+            import base64
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+            await log_qr_generation(url, qr_code_base64, user_id, customization_dict, base_url)
             
         from io import BytesIO
         return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
@@ -358,6 +375,15 @@ async def download_qr_code(body: QRRequest, user: dict = Depends(get_current_use
     )
     
     if qr_code_bytes:
+        # Log generation for history
+        user_id = user["id"]
+        # In a real app we might want to get the base_url from the request if possible, 
+        # but here we can just pass None or try to get it if we had the request object.
+        # Since we don't have request object in download_qr_code parameters, we'll pass None for base_url
+        import base64
+        qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+        await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None)
+
         from io import BytesIO
         filename = f"qr_{uuid.uuid4().hex[:8]}.png"
         headers = {
@@ -385,14 +411,33 @@ async def get_history_image(history_id: str):
     from io import BytesIO
     
     item = await get_qr_history_item_public(history_id)
-    if not item or "qr_code" not in item:
-        raise HTTPException(status_code=404, detail="QR history item or image not found")
+    if not item:
+        raise HTTPException(status_code=404, detail="QR history item not found")
     
-    try:
-        qr_code_bytes = base64.b64decode(item["qr_code"])
-        return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to decode QR image")
+    # Try to get from stored qr_code
+    if "qr_code" in item:
+        try:
+            qr_code_bytes = base64.b64decode(item["qr_code"])
+            return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
+        except Exception:
+            pass # Fallback to regeneration
+            
+    # Fallback: Regenerate if missing or corrupted
+    if "url" in item:
+        customization = item.get("customization", {})
+        qr_code_bytes = qr_service.generate_qr_code(
+            url=item["url"],
+            fill_color=customization.get("fill_color", "black"),
+            back_color=customization.get("back_color", "white"),
+            pattern=customization.get("pattern", "square"),
+            error_correction=customization.get("error_correction", "L"),
+            logo=customization.get("logo"),
+            logo_size=customization.get("logo_size", 0.3)
+        )
+        if qr_code_bytes:
+            return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
+            
+    raise HTTPException(status_code=404, detail="QR image could not be retrieved or regenerated")
 
 @router.delete("/history/{history_id}")
 async def delete_history(history_id: str, user: dict = Depends(get_current_user)):

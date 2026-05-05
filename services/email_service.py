@@ -83,7 +83,7 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
     <body>
         <div class="container">
             <div class="header">
-                <h1>🔐 {title}</h1>
+                <h1> {title}</h1>
             </div>
             <div class="content">
                 <p>{message}</p>
