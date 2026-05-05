@@ -319,17 +319,15 @@ def create_ad():
     image_url = url_for("serve_uploaded_file", filename=filename, _external=True)
 
     ad = {
-        "id": next_ad_id(),
         "placement": placement,
         "imageUrl": image_url,
         "redirectUrl": redirect_url,
         "isActive": is_active,
         "imagePath": image_path,
     }
-    ads_data.append(ad)
-    save_ads_data(ads_data)
-
-    return jsonify(serialize_ad(ad)), 201
+    
+    saved_ad = asyncio.run(AdsService.create_ad(ad))
+    return jsonify(serialize_ad(saved_ad)), 201
 
 
 @app.route("/ads", methods=["GET"])
@@ -347,31 +345,34 @@ def list_ads():
 @require_auth
 def update_ad(ad_id: int):
     """Update an advertisement (metadata and/or image)."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    ad = asyncio.run(AdsService.get_ad_by_id(ad_id))
     if not ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
 
-    # Support JSON or multipart form for flexibility
+    update_data = {}
     if request.files or request.form:
         data = request.form
-        redirect_url = data.get("redirectUrl", ad["redirectUrl"])
-        placement = data.get("placement", ad["placement"])
+        redirect_url = data.get("redirectUrl")
+        placement = data.get("placement")
         is_active_raw = data.get("isActive")
     else:
         data = request.get_json(silent=True) or {}
-        redirect_url = data.get("redirectUrl", ad["redirectUrl"])
-        placement = data.get("placement", ad["placement"])
+        redirect_url = data.get("redirectUrl")
+        placement = data.get("placement")
         is_active_raw = data.get("isActive")
 
-    if placement not in VALID_PLACEMENTS:
-        return jsonify({"error": "Invalid placement", "message": "Placement must match allowed list"}), 400
-    if redirect_url and not validate_url(redirect_url):
-        return jsonify({"error": "Invalid redirectUrl", "message": "Provide a valid http/https URL"}), 400
+    if placement:
+        if placement not in VALID_PLACEMENTS:
+            return jsonify({"error": "Invalid placement", "message": "Placement must match allowed list"}), 400
+        update_data["placement"] = placement
+        
+    if redirect_url:
+        if not validate_url(redirect_url):
+            return jsonify({"error": "Invalid redirectUrl", "message": "Provide a valid http/https URL"}), 400
+        update_data["redirectUrl"] = redirect_url
 
     if is_active_raw is not None:
-        ad["isActive"] = bool(is_active_raw) if isinstance(is_active_raw, bool) else str(is_active_raw).lower() not in {"false", "0", "no"}
-    ad["placement"] = placement
-    ad["redirectUrl"] = redirect_url
+        update_data["isActive"] = bool(is_active_raw) if isinstance(is_active_raw, bool) else str(is_active_raw).lower() not in {"false", "0", "no"}
 
     image = request.files.get("image") if request.files else None
     if image and image.filename:
@@ -386,30 +387,29 @@ def update_ad(ad_id: int):
                 os.remove(old_path)
             except OSError:
                 pass
-        ad["imagePath"] = image_path
-        ad["imageUrl"] = url_for("serve_uploaded_file", filename=filename, _external=True)
+        update_data["imagePath"] = image_path
+        update_data["imageUrl"] = url_for("serve_uploaded_file", filename=filename, _external=True)
 
-    save_ads_data(ads_data)
-    return jsonify(serialize_ad(ad)), 200
+    updated_ad = asyncio.run(AdsService.update_ad(ad_id, update_data))
+    return jsonify(serialize_ad(updated_ad)), 200
 
 
 @app.route("/ads/<int:ad_id>", methods=["DELETE"])
 @require_auth
 def delete_ad(ad_id: int):
     """Delete an advertisement."""
-    global ads_data
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    ad = asyncio.run(AdsService.get_ad_by_id(ad_id))
     if not ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
 
-    ads_data = [item for item in ads_data if item["id"] != ad_id]
     image_path = ad.get("imagePath")
     if image_path and os.path.exists(image_path):
         try:
             os.remove(image_path)
         except OSError:
             pass
-    save_ads_data(ads_data)
+            
+    asyncio.run(AdsService.delete_ad(ad_id))
     return jsonify({"deleted": ad_id}), 200
 
 
@@ -417,23 +417,20 @@ def delete_ad(ad_id: int):
 @require_auth
 def set_ad_status(ad_id: int):
     """Explicitly enable or disable a specific advertisement."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
-    if not ad:
-        return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
-    
     data = request.get_json(silent=True) or {}
     is_active = data.get("isActive")
     if is_active is None:
         return jsonify({"error": "Bad Request", "message": "Missing 'isActive' boolean"}), 400
     
-    ad["isActive"] = bool(is_active)
-    save_ads_data(ads_data)
+    updated_ad = asyncio.run(AdsService.update_ad(ad_id, {"isActive": bool(is_active)}))
+    if not updated_ad:
+        return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
     
-    status_str = "enabled" if ad["isActive"] else "disabled"
+    status_str = "enabled" if updated_ad["isActive"] else "disabled"
     return jsonify({
         "message": f"Ad {ad_id} {status_str} successfully",
         "ad_id": ad_id,
-        "isActive": ad["isActive"]
+        "isActive": updated_ad["isActive"]
     }), 200
 
 
@@ -441,18 +438,15 @@ def set_ad_status(ad_id: int):
 @require_auth
 def toggle_ad_status(ad_id: int):
     """Toggle the active status of a specific advertisement."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
-    if not ad:
+    updated_ad = asyncio.run(AdsService.toggle_ad_status(ad_id))
+    if not updated_ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
     
-    ad["isActive"] = not ad.get("isActive", True)
-    save_ads_data(ads_data)
-    
-    status_str = "enabled" if ad["isActive"] else "disabled"
+    status_str = "enabled" if updated_ad["isActive"] else "disabled"
     return jsonify({
         "message": f"Ad {ad_id} {status_str} successfully",
         "ad_id": ad_id,
-        "isActive": ad["isActive"]
+        "isActive": updated_ad["isActive"]
     }), 200
 
 
@@ -704,7 +698,9 @@ def generate_qr_code_get(url):
         )
         
         if qr_code_bytes:
-            asyncio.run(log_qr_generation(url, request.user["id"], customization))
+            import base64
+            qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
+            asyncio.run(log_qr_generation(url, qr_code_base64, request.user["id"], customization))
             return send_file(
                 BytesIO(qr_code_bytes),
                 mimetype='image/png',
