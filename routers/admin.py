@@ -1,9 +1,12 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Request, Query
 from pydantic import BaseModel
 from typing import Optional
 from services.admin_service import AdminService
 from utils.jwt_utils import create_access_token, decode_access_token
+import os
+import uuid
+from config import config
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -85,4 +88,45 @@ async def toggle_ads(body: AdsStatusUpdate, admin: dict = Depends(get_current_ad
     return {
         "message": f"Ads {'enabled' if body.enabled else 'disabled'} successfully",
         "ads_enabled": body.enabled
+    }
+
+@router.get("/profile")
+async def get_admin_profile(admin: dict = Depends(get_current_admin)):
+    """Get admin profile details (logo and profile image)."""
+    return await AdminService.get_profile()
+
+@router.post("/profile")
+async def update_admin_profile(
+    request: Request,
+    logo: Optional[UploadFile] = File(None),
+    profile_image: Optional[UploadFile] = File(None),
+    admin: dict = Depends(get_current_admin)
+):
+    """Update admin logo and/or profile image."""
+    update_data = {}
+    base_url = str(request.base_url).rstrip("/")
+    
+    if logo and logo.filename:
+        filename = f"logo_{uuid.uuid4().hex[:8]}_{logo.filename}"
+        file_path = os.path.join(config.UPLOAD_FOLDER, filename)
+        with open(file_path, "wb") as buffer:
+            content = await logo.read()
+            buffer.write(content)
+        update_data["logo"] = f"{base_url}/uploads/{filename}"
+        
+    if profile_image and profile_image.filename:
+        filename = f"avatar_{uuid.uuid4().hex[:8]}_{profile_image.filename}"
+        file_path = os.path.join(config.UPLOAD_FOLDER, filename)
+        with open(file_path, "wb") as buffer:
+            content = await profile_image.read()
+            buffer.write(content)
+        update_data["profile_image"] = f"{base_url}/uploads/{filename}"
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No files provided for update")
+        
+    updated_profile = await AdminService.update_profile(update_data)
+    return {
+        "message": "Profile updated successfully",
+        "profile": updated_profile
     }
