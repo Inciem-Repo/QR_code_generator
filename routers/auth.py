@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Header, Query, Request
+from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from services.auth_service import (
@@ -64,13 +64,12 @@ class GoogleAuthRequest(BaseModel):
 # =======================
 
 async def get_current_user(
-    request: Request,
     authorization: Optional[str] = Header(None),
     auth_query: Optional[str] = Query(None, alias="authorization")
 ):
-    token_str = authorization or auth_query or request.cookies.get("authorization") or request.cookies.get("access_token") or request.cookies.get("token")
+    token_str = authorization or auth_query
     if not token_str:
-        raise HTTPException(status_code=401, detail="Missing Authorization header, authorization query parameter, or auth cookie")
+        raise HTTPException(status_code=401, detail="Missing Authorization header or authorization query parameter")
     
     try:
         if token_str.lower().startswith("bearer "):
@@ -97,11 +96,10 @@ async def get_current_user(
 
 
 async def get_current_user_optional(
-    request: Request,
     authorization: Optional[str] = Header(None),
     auth_query: Optional[str] = Query(None, alias="authorization")
 ) -> Optional[dict]:
-    token_str = authorization or auth_query or request.cookies.get("authorization") or request.cookies.get("access_token") or request.cookies.get("token")
+    token_str = authorization or auth_query
     if not token_str:
         return None
     
