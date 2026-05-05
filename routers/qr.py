@@ -399,7 +399,12 @@ async def get_history(request: Request, user: dict = Depends(get_current_user)):
     for entry in history:
         # Provide the actual base64 image data in his preferred field name
         if "qr_code" in entry:
-            entry["qr_image"] = entry["qr_code"]
+            qr_data = entry["qr_code"]
+            # Add data URL prefix if not already present
+            if not qr_data.startswith("data:"):
+                entry["qr_image"] = f"data:image/png;base64,{qr_data}"
+            else:
+                entry["qr_image"] = qr_data
         
         # Also provide the direct view URL
         entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
@@ -417,7 +422,10 @@ async def get_history_image(history_id: str):
     # Try to get from stored qr_code
     if "qr_code" in item:
         try:
-            qr_code_bytes = base64.b64decode(item["qr_code"])
+            qr_data = item["qr_code"]
+            if "," in qr_data:
+                qr_data = qr_data.split(",")[1]
+            qr_code_bytes = base64.b64decode(qr_data)
             return StreamingResponse(BytesIO(qr_code_bytes), media_type="image/png")
         except Exception:
             pass # Fallback to regeneration
