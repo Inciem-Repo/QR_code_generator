@@ -48,12 +48,15 @@ class AdsService:
         if not update_data:
             return await AdsService.get_ad_by_id(ad_id)
             
-        await db.db.ads.update_one({"id": ad_id}, {"$set": update_data})
+        await db.db.ads.update_one(
+            {"$or": [{"id": ad_id}, {"id": str(ad_id)}]}, 
+            {"$set": update_data}
+        )
         return await AdsService.get_ad_by_id(ad_id)
 
     @staticmethod
     async def delete_ad(ad_id: int) -> bool:
-        result = await db.db.ads.delete_one({"id": ad_id})
+        result = await db.db.ads.delete_one({"$or": [{"id": ad_id}, {"id": str(ad_id)}]})
         return result.deleted_count > 0
 
     @staticmethod
