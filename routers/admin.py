@@ -121,15 +121,47 @@ async def update_admin_images(
         profile_image_type=profile_image_type
     )
 
-class AdminProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[EmailStr] = None
-
 @router.put("/profile")
 async def update_admin_profile(
-    body: AdminProfileUpdate,
+    name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    logo: Optional[UploadFile] = File(None),
+    profile_image: Optional[UploadFile] = File(None),
     admin: dict = Depends(get_current_admin)
 ):
-    """Update admin profile details (name, email)."""
-    update_data = body.model_dump(exclude_unset=True)
-    return await AdminService.update_admin_profile(update_data)
+    """Update admin profile details (name, email, logo, profile_image)."""
+    # Handle text updates
+    if name or email:
+        update_data = {}
+        if name: update_data["name"] = name
+        if email: update_data["email"] = email
+        await AdminService.update_admin_profile(update_data)
+    
+    # Handle image updates
+    if logo or profile_image:
+        logo_content = None
+        logo_name = None
+        logo_type = None
+        if logo:
+            logo_content = await logo.read()
+            logo_name = logo.filename
+            logo_type = logo.content_type
+
+        profile_image_content = None
+        profile_image_name = None
+        profile_image_type = None
+        if profile_image:
+            profile_image_content = await profile_image.read()
+            profile_image_name = profile_image.filename
+            profile_image_type = profile_image.content_type
+
+        await AdminService.update_admin_images(
+            logo_content=logo_content,
+            logo_name=logo_name,
+            logo_type=logo_type,
+            profile_image_content=profile_image_content,
+            profile_image_name=profile_image_name,
+            profile_image_type=profile_image_type
+        )
+    
+    return await AdminService.get_admin_profile()

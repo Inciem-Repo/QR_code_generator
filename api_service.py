@@ -735,6 +735,53 @@ def generate_qr_code_get(url):
         }), 500
 
 
+@app.route("/admin/profile", methods=["GET"])
+@require_auth
+def get_admin_profile_flask():
+    """Fetch the current admin logo and profile image URLs."""
+    profile = asyncio.run(AdminService.get_admin_profile())
+    return jsonify(profile)
+
+@app.route("/admin/profile", methods=["POST", "PUT"])
+@require_auth
+def update_admin_profile_flask():
+    """Update admin profile details and/or images."""
+    # Handle text updates from form or JSON
+    name = request.form.get("name")
+    email = request.form.get("email")
+    
+    if name or email:
+        update_data = {}
+        if name: update_data["name"] = name
+        if email: update_data["email"] = email
+        asyncio.run(AdminService.update_admin_profile(update_data))
+        
+    # Handle image updates
+    logo = request.files.get("logo")
+    profile_image = request.files.get("profile_image")
+    
+    if logo or profile_image:
+        logo_content = logo.read() if logo else None
+        logo_name = logo.filename if logo else None
+        logo_type = logo.content_type if logo else None
+        
+        profile_image_content = profile_image.read() if profile_image else None
+        profile_image_name = profile_image.filename if profile_image else None
+        profile_image_type = profile_image.content_type if profile_image else None
+        
+        asyncio.run(AdminService.update_admin_images(
+            logo_content=logo_content,
+            logo_name=logo_name,
+            logo_type=logo_type,
+            profile_image_content=profile_image_content,
+            profile_image_name=profile_image_name,
+            profile_image_type=profile_image_type
+        ))
+        
+    profile = asyncio.run(AdminService.get_admin_profile())
+    return jsonify(profile)
+
+
 if __name__ == "__main__":
     print("Starting QR Code API Service...")
     print("API Endpoints:")
