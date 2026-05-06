@@ -12,6 +12,7 @@ from services.admin_service import AdminService
 from services.ads_service import AdsService
 from routers.auth import get_current_user, get_current_user_optional
 from routers.admin import get_current_admin
+from utils.s3_utils import S3Service
 
 router = APIRouter(tags=["QR & Ads"])
 
@@ -89,22 +90,20 @@ async def create_ad(
     if not allowed_file(image.filename):
         raise HTTPException(status_code=400, detail=f"Invalid image type. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
 
-    filename = f"{uuid.uuid4().hex}_{image.filename}"
-    image_path = os.path.join(config.UPLOAD_FOLDER, filename)
+    filename = f"ads/{uuid.uuid4().hex}_{image.filename}"
+    content = await image.read()
     
-    with open(image_path, "wb") as buffer:
-        content = await image.read()
-        buffer.write(content)
+    image_url = await S3Service.upload_file(content, filename, content_type=image.content_type)
     
-    base_url = str(request.base_url).rstrip("/")
-    image_url = f"{base_url}/uploads/{filename}"
+    if not image_url:
+        raise HTTPException(status_code=500, detail="Failed to upload image to S3")
 
     ad = {
         "placement": placement,
         "imageUrl": image_url,
         "redirectUrl": redirectUrl,
         "isActive": isActive,
-        "imagePath": image_path,
+        "imagePath": filename, # Store S3 key as imagePath
     }
     
     saved_ad = await AdsService.create_ad(ad)
@@ -165,25 +164,26 @@ async def update_ad(
         if not allowed_file(image.filename):
             raise HTTPException(status_code=400, detail="Invalid image type")
         
-        filename = f"{uuid.uuid4().hex}_{image.filename}"
-        image_path = os.path.join(config.UPLOAD_FOLDER, filename)
-        
+        filename = f"ads/{uuid.uuid4().hex}_{image.filename}"
         content = await image.read()
         if not content:
              raise HTTPException(status_code=400, detail="Uploaded image is empty")
 
-        with open(image_path, "wb") as buffer:
-            buffer.write(content)
+        new_image_url = await S3Service.upload_file(content, filename, content_type=image.content_type)
+        if not new_image_url:
+            raise HTTPException(status_code=500, detail="Failed to upload image to S3")
             
-        # Cleanup old image ONLY after successful save
+        # Cleanup old image
         old_path = ad.get("imagePath")
-        if old_path and os.path.exists(old_path):
-            try: os.remove(old_path)
-            except: pass
+        if old_path:
+            if isinstance(old_path, str) and old_path.startswith("ads/"):
+                await S3Service.delete_file(old_path)
+            elif os.path.exists(str(old_path)):
+                try: os.remove(str(old_path))
+                except: pass
             
-        update_data["imagePath"] = image_path
-        base_url = str(request.base_url).rstrip("/")
-        update_data["imageUrl"] = f"{base_url}/uploads/{filename}"
+        update_data["imagePath"] = filename
+        update_data["imageUrl"] = new_image_url
 
     updated_ad = await AdsService.update_ad(ad_id, update_data)
     return serialize_ad(updated_ad)
@@ -195,9 +195,12 @@ async def delete_ad(ad_id: int, admin: dict = Depends(get_current_admin)):
         raise HTTPException(status_code=404, detail="Ad not found")
 
     image_path = ad.get("imagePath")
-    if image_path and os.path.exists(image_path):
-        try: os.remove(image_path)
-        except: pass
+    if image_path:
+        if isinstance(image_path, str) and image_path.startswith("ads/"):
+            await S3Service.delete_file(image_path)
+        elif os.path.exists(str(image_path)):
+            try: os.remove(str(image_path))
+            except: pass
         
     await AdsService.delete_ad(ad_id)
     return {"deleted": ad_id}
@@ -301,7 +304,6 @@ async def generate_qr_code_image(request: Request, body: QRRequest, user: Option
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            import base64
             qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None, base_url)
             
@@ -343,7 +345,6 @@ async def generate_qr_code_get(
         if user:
             user_id = user["id"]
             base_url = str(request.base_url).rstrip("/")
-            import base64
             qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
             await log_qr_generation(url, qr_code_base64, user_id, customization_dict, base_url)
             
@@ -380,10 +381,6 @@ async def download_qr_code(body: QRRequest, user: dict = Depends(get_current_use
     if qr_code_bytes:
         # Log generation for history
         user_id = user["id"]
-        # In a real app we might want to get the base_url from the request if possible, 
-        # but here we can just pass None or try to get it if we had the request object.
-        # Since we don't have request object in download_qr_code parameters, we'll pass None for base_url
-        import base64
         qr_code_base64 = base64.b64encode(qr_code_bytes).decode('utf-8')
         await log_qr_generation(body.url, qr_code_base64, user_id, customization_dict if body.customization else None)
 
@@ -413,7 +410,8 @@ async def get_history(request: Request, user: dict = Depends(get_current_user)):
                 entry["qr_image"] = None
         
         # Also provide the direct view URL
-        entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
+        if not entry.get("qr_image_url") or not entry["qr_image_url"].startswith("http"):
+             entry["qr_image_url"] = f"{base_url}/history/{entry['_id']}/image"
     return history
 
 @router.get("/history/{history_id}/image")
