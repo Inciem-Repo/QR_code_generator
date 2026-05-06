@@ -1,6 +1,9 @@
 from datetime import datetime
 from database import db
 from typing import Optional
+import base64
+import uuid
+from utils.s3_utils import S3Service
 
 async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = None, customization: Optional[dict] = None, base_url: Optional[str] = None):
     """
@@ -16,13 +19,29 @@ async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = Non
     from bson.objectid import ObjectId
     history_id = ObjectId()
     
+    # Upload to S3
+    qr_image_url = None
+    try:
+        # Decode base64 if it has prefix
+        qr_data = qr_code
+        if "," in qr_data:
+            qr_data = qr_data.split(",")[1]
+        
+        qr_bytes = base64.b64decode(qr_data)
+        filename = f"qrcodes/{uuid.uuid4().hex}.png"
+        qr_image_url = await S3Service.upload_file(qr_bytes, filename, content_type="image/png")
+    except Exception as e:
+        print(f"Error uploading QR to S3: {e}")
+
     log_entry = {
         "_id": history_id,
         "url": url,
-        "qr_code": qr_code,
+        "qr_code": qr_code, # Keep base64 for compatibility if needed, or remove to save space
+        "qr_image_url": qr_image_url,
         "user_id": user_id,
         "timestamp": datetime.utcnow(),
-        "type": "qr_generation"
+        "type": "qr_generation",
+        "s3_key": filename if qr_image_url else None
     }
     
     # Add customization data if provided
@@ -36,7 +55,8 @@ async def log_qr_generation(url: str, qr_code: str, user_id: Optional[str] = Non
             "logo_size": customization.get("logo_size", 0.3) if customization.get("logo") else None
         }
     
-    if base_url:
+    # If S3 upload failed, fallback to local history URL if base_url is provided
+    if not qr_image_url and base_url:
         log_entry["qr_image_url"] = f"{base_url}/history/{str(history_id)}/image"
         
     await db.db.qr_history.insert_one(log_entry)
@@ -89,6 +109,15 @@ async def delete_qr_history_item(history_id: str, user_id: str) -> bool:
     """
     from bson.objectid import ObjectId
     try:
+        # Get the item first to get the s3_key
+        item = await db.db.qr_history.find_one({
+            "_id": ObjectId(history_id),
+            "user_id": user_id
+        })
+        
+        if item and item.get("s3_key"):
+            await S3Service.delete_file(item["s3_key"])
+
         result = await db.db.qr_history.delete_one({
             "_id": ObjectId(history_id),
             "user_id": user_id
