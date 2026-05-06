@@ -22,6 +22,7 @@ from services.qr_history_service import log_qr_generation
 from database import db
 import asyncio
 from utils.jwt_utils import create_access_token, decode_access_token
+from utils.s3_utils import S3Service
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
@@ -313,10 +314,13 @@ def create_ad():
     if not allowed_file(image.filename):
         return jsonify({"error": "Invalid image type", "message": f"Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}), 400
 
-    filename = f"{uuid.uuid4().hex}_{secure_filename(image.filename)}"
-    image_path = os.path.join(UPLOAD_FOLDER, filename)
-    image.save(image_path)
-    image_url = url_for("serve_uploaded_file", filename=filename, _external=True)
+    filename = f"ads/{uuid.uuid4().hex}_{secure_filename(image.filename)}"
+    content = image.read()
+    
+    image_url = asyncio.run(S3Service.upload_file(content, filename, content_type=image.content_type))
+    
+    if not image_url:
+         return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
 
     ad = {
         "id": next_ad_id(),
@@ -324,7 +328,7 @@ def create_ad():
         "imageUrl": image_url,
         "redirectUrl": redirect_url,
         "isActive": is_active,
-        "imagePath": image_path,
+        "imagePath": filename, # Store S3 key
     }
     ads_data.append(ad)
     save_ads_data(ads_data)
@@ -377,17 +381,24 @@ def update_ad(ad_id: int):
     if image and image.filename:
         if not allowed_file(image.filename):
             return jsonify({"error": "Invalid image type", "message": f"Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}), 400
-        filename = f"{uuid.uuid4().hex}_{secure_filename(image.filename)}"
-        image_path = os.path.join(UPLOAD_FOLDER, filename)
-        image.save(image_path)
+        filename = f"ads/{uuid.uuid4().hex}_{secure_filename(image.filename)}"
+        content = image.read()
+        
+        new_image_url = asyncio.run(S3Service.upload_file(content, filename, content_type=image.content_type))
+        if not new_image_url:
+             return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
+             
+        # Cleanup old image
         old_path = ad.get("imagePath")
-        if old_path and os.path.exists(old_path):
-            try:
-                os.remove(old_path)
-            except OSError:
-                pass
-        ad["imagePath"] = image_path
-        ad["imageUrl"] = url_for("serve_uploaded_file", filename=filename, _external=True)
+        if old_path:
+            if isinstance(old_path, str) and old_path.startswith("ads/"):
+                asyncio.run(S3Service.delete_file(old_path))
+            elif os.path.exists(str(old_path)):
+                try: os.remove(str(old_path))
+                except: pass
+
+        ad["imagePath"] = filename
+        ad["imageUrl"] = new_image_url
 
     save_ads_data(ads_data)
     return jsonify(serialize_ad(ad)), 200
@@ -404,11 +415,12 @@ def delete_ad(ad_id: int):
 
     ads_data = [item for item in ads_data if item["id"] != ad_id]
     image_path = ad.get("imagePath")
-    if image_path and os.path.exists(image_path):
-        try:
-            os.remove(image_path)
-        except OSError:
-            pass
+    if image_path:
+        if isinstance(image_path, str) and image_path.startswith("ads/"):
+            asyncio.run(S3Service.delete_file(image_path))
+        elif os.path.exists(str(image_path)):
+            try: os.remove(str(image_path))
+            except: pass
     save_ads_data(ads_data)
     return jsonify({"deleted": ad_id}), 200
 
@@ -534,7 +546,7 @@ def generate_qr_code():
         
         if qr_code_base64:
             # Log QR generation with customization info
-            asyncio.run(log_qr_generation(url, request.user["id"], customization))
+            asyncio.run(log_qr_generation(url, qr_code_base64, request.user["id"], customization))
             return jsonify({
                 "success": True,
                 "url": url,
@@ -721,6 +733,53 @@ def generate_qr_code_get(url):
             "error": "Internal server error",
             "message": str(e)
         }), 500
+
+
+@app.route("/admin/profile", methods=["GET"])
+@require_auth
+def get_admin_profile_flask():
+    """Fetch the current admin logo and profile image URLs."""
+    profile = asyncio.run(AdminService.get_admin_profile())
+    return jsonify(profile)
+
+@app.route("/admin/profile", methods=["POST", "PUT"])
+@require_auth
+def update_admin_profile_flask():
+    """Update admin profile details and/or images."""
+    # Handle text updates from form or JSON
+    name = request.form.get("name")
+    email = request.form.get("email")
+    
+    if name or email:
+        update_data = {}
+        if name: update_data["name"] = name
+        if email: update_data["email"] = email
+        asyncio.run(AdminService.update_admin_profile(update_data))
+        
+    # Handle image updates
+    logo = request.files.get("logo")
+    profile_image = request.files.get("profile_image")
+    
+    if logo or profile_image:
+        logo_content = logo.read() if logo else None
+        logo_name = logo.filename if logo else None
+        logo_type = logo.content_type if logo else None
+        
+        profile_image_content = profile_image.read() if profile_image else None
+        profile_image_name = profile_image.filename if profile_image else None
+        profile_image_type = profile_image.content_type if profile_image else None
+        
+        asyncio.run(AdminService.update_admin_images(
+            logo_content=logo_content,
+            logo_name=logo_name,
+            logo_type=logo_type,
+            profile_image_content=profile_image_content,
+            profile_image_name=profile_image_name,
+            profile_image_type=profile_image_type
+        ))
+        
+    profile = asyncio.run(AdminService.get_admin_profile())
+    return jsonify(profile)
 
 
 if __name__ == "__main__":
