@@ -1,7 +1,7 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Header
-from pydantic import BaseModel
 from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, UploadFile, File, Form
+from pydantic import BaseModel, EmailStr
 from services.admin_service import AdminService
 from utils.jwt_utils import create_access_token, decode_access_token
 
@@ -13,8 +13,6 @@ ADMIN_PASSWORD = "1234"
 class AdminLoginRequest(BaseModel):
     username: str
     password: str
-
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
 
 async def get_current_admin(
     authorization: Optional[str] = Header(None),
@@ -86,3 +84,52 @@ async def toggle_ads(body: AdsStatusUpdate, admin: dict = Depends(get_current_ad
         "message": f"Ads {'enabled' if body.enabled else 'disabled'} successfully",
         "ads_enabled": body.enabled
     }
+@router.get("/profile")
+async def get_admin_profile(admin: dict = Depends(get_current_admin)):
+    """Fetch the current admin logo and profile image URLs."""
+    return await AdminService.get_admin_profile()
+
+@router.post("/profile")
+async def update_admin_images(
+    logo: Optional[UploadFile] = File(None),
+    profile_image: Optional[UploadFile] = File(None),
+    admin: dict = Depends(get_current_admin)
+):
+    """Upload or update the admin logo and profile picture."""
+    logo_content = None
+    logo_name = None
+    logo_type = None
+    if logo:
+        logo_content = await logo.read()
+        logo_name = logo.filename
+        logo_type = logo.content_type
+
+    profile_image_content = None
+    profile_image_name = None
+    profile_image_type = None
+    if profile_image:
+        profile_image_content = await profile_image.read()
+        profile_image_name = profile_image.filename
+        profile_image_type = profile_image.content_type
+
+    return await AdminService.update_admin_images(
+        logo_content=logo_content,
+        logo_name=logo_name,
+        logo_type=logo_type,
+        profile_image_content=profile_image_content,
+        profile_image_name=profile_image_name,
+        profile_image_type=profile_image_type
+    )
+
+class AdminProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+
+@router.put("/profile")
+async def update_admin_profile(
+    body: AdminProfileUpdate,
+    admin: dict = Depends(get_current_admin)
+):
+    """Update admin profile details (name, email)."""
+    update_data = body.model_dump(exclude_unset=True)
+    return await AdminService.update_admin_profile(update_data)
