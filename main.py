@@ -17,6 +17,12 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_db_client():
     await db.connect_db()
+    # Ensure upload directories exist to prevent FileNotFoundError on some environments
+    import os
+    for folder in ["uploads", "ads", "admin", "qrcodes"]:
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+            print(f"Created directory: {folder}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
