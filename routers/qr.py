@@ -1,10 +1,11 @@
-import os
 import uuid
+import re
 import json
 import base64
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Request, Depends, Header
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, HttpUrl
 from qr_service import QRCodeService
 from services.qr_history_service import log_qr_generation, get_user_qr_history
@@ -13,11 +14,23 @@ from services.ads_service import AdsService
 from routers.auth import get_current_user, get_current_user_optional
 from routers.admin import get_current_admin
 from utils.s3_utils import S3Service
+from config import config
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["QR & Ads"])
 
 
-from config import config
+def sanitize_filename(filename: str) -> str:
+    """Strip path separators and replace unsafe characters with underscores.
+    Mirrors werkzeug.utils.secure_filename without requiring werkzeug."""
+    # Remove any directory components
+    filename = filename.replace("\\", "/").split("/")[-1]
+    # Keep only safe characters: alphanumerics, dots, hyphens, underscores
+    filename = re.sub(r"[^\w.\-]", "_", filename)
+    # Collapse multiple underscores/dots
+    filename = re.sub(r"_+", "_", filename).strip("_")
+    return filename or "upload"
 
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 VALID_PLACEMENTS = {
@@ -68,12 +81,8 @@ class AdStatusUpdate(BaseModel):
     isActive: bool
 
 
-@router.get("/uploads/{filename}")
-async def serve_uploaded_file(filename: str):
-    file_path = os.path.join(config.UPLOAD_FOLDER, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path)
+# NOTE: /uploads/{filename} route removed.
+# All ad images are served directly from their S3 public URL stored in imageUrl field.
 
 @router.post("/ads")
 async def create_ad(
@@ -87,10 +96,16 @@ async def create_ad(
     if placement not in VALID_PLACEMENTS:
         raise HTTPException(status_code=400, detail="Invalid placement")
     
+    # Guard against None/empty filename before doing extension check
+    if not image or not image.filename:
+        raise HTTPException(status_code=400, detail="No image file received")
+
     if not allowed_file(image.filename):
         raise HTTPException(status_code=400, detail=f"Invalid image type. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
 
-    filename = f"ads/{uuid.uuid4().hex}_{image.filename}"
+    safe_name = sanitize_filename(image.filename or "image")
+    filename = f"ads/{uuid.uuid4().hex}_{safe_name}"
+    logger.info("[S3 Upload] Creating new ad image: %s", filename)
     content = await image.read()
     
     image_url = await S3Service.upload_file(content, filename, content_type=image.content_type)
@@ -163,25 +178,31 @@ async def update_ad(
     if image and image.filename:
         if not allowed_file(image.filename):
             raise HTTPException(status_code=400, detail="Invalid image type")
-        
-        filename = f"ads/{uuid.uuid4().hex}_{image.filename}"
+
+        safe_name = sanitize_filename(image.filename or "image")
+        filename = f"ads/{uuid.uuid4().hex}_{safe_name}"
         content = await image.read()
         if not content:
-             raise HTTPException(status_code=400, detail="Uploaded image is empty")
+            raise HTTPException(status_code=400, detail="Uploaded image is empty")
 
+        logger.info("[S3 Upload] Uploading updated ad image: %s", filename)
         new_image_url = await S3Service.upload_file(content, filename, content_type=image.content_type)
         if not new_image_url:
             raise HTTPException(status_code=500, detail="Failed to upload image to S3")
-            
-        # Cleanup old image
-        old_path = ad.get("imagePath")
-        if old_path:
-            if isinstance(old_path, str) and old_path.startswith("ads/"):
-                await S3Service.delete_file(old_path)
-            elif os.path.exists(str(old_path)):
-                try: os.remove(str(old_path))
-                except: pass
-            
+
+        # Delete old S3 object — only if it is a known S3 key prefix.
+        # Old ads migrated from local storage may have paths like 'uploads/...';
+        # those files no longer exist locally, so we safely skip them.
+        old_path = ad.get("imagePath", "")
+        if isinstance(old_path, str) and old_path.startswith(("ads/", "admin/", "qrcodes/")):
+            logger.info("[S3 Delete] Removing old ad image from S3: %s", old_path)
+            await S3Service.delete_file(old_path)
+        elif old_path:
+            logger.warning(
+                "[S3 Skip] Old imagePath '%s' is a legacy local path — skipping local delete (S3 only mode).",
+                old_path
+            )
+
         update_data["imagePath"] = filename
         update_data["imageUrl"] = new_image_url
 
@@ -194,14 +215,16 @@ async def delete_ad(ad_id: int, admin: dict = Depends(get_current_admin)):
     if not ad:
         raise HTTPException(status_code=404, detail="Ad not found")
 
-    image_path = ad.get("imagePath")
-    if image_path:
-        if isinstance(image_path, str) and image_path.startswith("ads/"):
-            await S3Service.delete_file(image_path)
-        elif os.path.exists(str(image_path)):
-            try: os.remove(str(image_path))
-            except: pass
-        
+    image_path = ad.get("imagePath", "")
+    if isinstance(image_path, str) and image_path.startswith(("ads/", "admin/", "qrcodes/")):
+        logger.info("[S3 Delete] Removing ad image from S3: %s", image_path)
+        await S3Service.delete_file(image_path)
+    elif image_path:
+        logger.warning(
+            "[S3 Skip] imagePath '%s' is a legacy local path — skipping local delete (S3 only mode).",
+            image_path
+        )
+
     await AdsService.delete_ad(ad_id)
     return {"deleted": ad_id}
 

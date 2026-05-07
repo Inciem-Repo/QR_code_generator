@@ -1,18 +1,17 @@
 """
-API Microservice
+API Microservice (Flask)
 Handles HTTP requests for QR code generation and advertisement management.
+All image storage is S3-only — no local filesystem is used.
 """
 
 import json
-import os
 import re
 import uuid
 from functools import wraps
 from io import BytesIO
 
-from flask import Flask, jsonify, request, send_file, send_from_directory, url_for
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 
 from qr_service import QRCodeService
 from services.ads_service import AdsService
@@ -71,11 +70,6 @@ def add_standard_fields(response):
     return response
 
 # Paths and configuration
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-ADS_DATA_FILE = os.path.join(BASE_DIR, "ads_data.json")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 VALID_PLACEMENTS = {
     "top-wide",
@@ -95,10 +89,16 @@ ADMIN_PASSWORD = "1234"
 qr_service = QRCodeService()
 
 
+def sanitize_filename(filename: str) -> str:
+    """Replace unsafe filename characters with underscores (no external deps)."""
+    filename = filename.replace("\\", "/").split("/")[-1]
+    filename = re.sub(r"[^\w.\-]", "_", filename)
+    filename = re.sub(r"_+", "_", filename).strip("_")
+    return filename or "upload"
+
+
 def validate_url(url: str) -> bool:
-    """
-    Validate URL format.
-    """
+    """Validate URL format."""
     if not url or not isinstance(url, str):
         return False
 
@@ -115,34 +115,9 @@ def validate_url(url: str) -> bool:
 
 
 def allowed_file(filename: str) -> bool:
+    if not filename:
+        return False
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
-
-
-def load_ads_data():
-    """Load ads from disk."""
-    if not os.path.exists(ADS_DATA_FILE):
-        return []
-    try:
-        with open(ADS_DATA_FILE, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return []
-
-
-def save_ads_data(ads):
-    """Persist ads to disk."""
-    with open(ADS_DATA_FILE, "w", encoding="utf-8") as fh:
-        json.dump(ads, fh, indent=2)
-
-
-ads_data = load_ads_data()
-
-
-def next_ad_id():
-    """Generate the next ad id."""
-    if not ads_data:
-        return 1
-    return max(ad["id"] for ad in ads_data) + 1
 
 
 def require_auth(fn):
@@ -223,18 +198,15 @@ def is_ads_enabled():
 def serialize_ad(ad: dict) -> dict:
     """Return ad with consistent keys."""
     return {
-        "id": ad["id"],
-        "placement": ad["placement"],
-        "imageUrl": ad["imageUrl"],
-        "redirectUrl": ad["redirectUrl"],
+        "id": ad.get("id"),
+        "placement": ad.get("placement"),
+        "imageUrl": ad.get("imageUrl"),
+        "redirectUrl": ad.get("redirectUrl"),
         "isActive": bool(ad.get("isActive", True)),
     }
 
 
-@app.route("/uploads/<path:filename>", methods=["GET"])
-def serve_uploaded_file(filename):
-    """Serve uploaded ad images publicly."""
-    return send_from_directory(UPLOAD_FOLDER, filename)
+# NOTE: /uploads/<filename> route removed — images are served from S3 URLs directly.
 
 
 # ---------------------- Admin Authentication ---------------------- #
@@ -298,7 +270,7 @@ def toggle_global_ads():
 @app.route("/ads", methods=["POST"])
 @require_auth
 def create_ad():
-    """Create a new advertisement with image upload."""
+    """Create a new advertisement with image upload to S3."""
     placement = request.form.get("placement")
     redirect_url = request.form.get("redirectUrl")
     is_active_raw = request.form.get("isActive", "true").lower()
@@ -314,26 +286,23 @@ def create_ad():
     if not allowed_file(image.filename):
         return jsonify({"error": "Invalid image type", "message": f"Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}), 400
 
-    filename = f"ads/{uuid.uuid4().hex}_{secure_filename(image.filename)}"
+    safe_name = sanitize_filename(image.filename)
+    filename = f"ads/{uuid.uuid4().hex}_{safe_name}"
     content = image.read()
-    
-    image_url = asyncio.run(S3Service.upload_file(content, filename, content_type=image.content_type))
-    
-    if not image_url:
-         return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
 
-    ad = {
-        "id": next_ad_id(),
+    image_url = asyncio.run(S3Service.upload_file(content, filename, content_type=image.content_type))
+    if not image_url:
+        return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
+
+    ad_data = {
         "placement": placement,
         "imageUrl": image_url,
         "redirectUrl": redirect_url,
         "isActive": is_active,
-        "imagePath": filename, # Store S3 key
+        "imagePath": filename,  # S3 key
     }
-    ads_data.append(ad)
-    save_ads_data(ads_data)
-
-    return jsonify(serialize_ad(ad)), 201
+    saved_ad = asyncio.run(AdsService.create_ad(ad_data))
+    return jsonify(serialize_ad(saved_ad)), 201
 
 
 @app.route("/ads", methods=["GET"])
@@ -351,77 +320,79 @@ def list_ads():
 @require_auth
 def update_ad(ad_id: int):
     """Update an advertisement (metadata and/or image)."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    ad = asyncio.run(AdsService.get_ad_by_id(ad_id))
     if not ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
 
-    # Support JSON or multipart form for flexibility
+    # Support JSON or multipart form
     if request.files or request.form:
         data = request.form
-        redirect_url = data.get("redirectUrl", ad["redirectUrl"])
-        placement = data.get("placement", ad["placement"])
-        is_active_raw = data.get("isActive")
     else:
         data = request.get_json(silent=True) or {}
-        redirect_url = data.get("redirectUrl", ad["redirectUrl"])
-        placement = data.get("placement", ad["placement"])
-        is_active_raw = data.get("isActive")
+
+    redirect_url = data.get("redirectUrl", ad.get("redirectUrl"))
+    placement = data.get("placement", ad.get("placement"))
+    is_active_raw = data.get("isActive")
 
     if placement not in VALID_PLACEMENTS:
         return jsonify({"error": "Invalid placement", "message": "Placement must match allowed list"}), 400
     if redirect_url and not validate_url(redirect_url):
         return jsonify({"error": "Invalid redirectUrl", "message": "Provide a valid http/https URL"}), 400
 
+    update_data = {"placement": placement, "redirectUrl": redirect_url}
     if is_active_raw is not None:
-        ad["isActive"] = bool(is_active_raw) if isinstance(is_active_raw, bool) else str(is_active_raw).lower() not in {"false", "0", "no"}
-    ad["placement"] = placement
-    ad["redirectUrl"] = redirect_url
+        update_data["isActive"] = (
+            bool(is_active_raw)
+            if isinstance(is_active_raw, bool)
+            else str(is_active_raw).lower() not in {"false", "0", "no"}
+        )
 
     image = request.files.get("image") if request.files else None
     if image and image.filename:
         if not allowed_file(image.filename):
             return jsonify({"error": "Invalid image type", "message": f"Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}"}), 400
-        filename = f"ads/{uuid.uuid4().hex}_{secure_filename(image.filename)}"
+
+        safe_name = sanitize_filename(image.filename)
+        filename = f"ads/{uuid.uuid4().hex}_{safe_name}"
         content = image.read()
-        
+
         new_image_url = asyncio.run(S3Service.upload_file(content, filename, content_type=image.content_type))
         if not new_image_url:
-             return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
-             
-        # Cleanup old image
-        old_path = ad.get("imagePath")
-        if old_path:
-            if isinstance(old_path, str) and old_path.startswith("ads/"):
-                asyncio.run(S3Service.delete_file(old_path))
-            elif os.path.exists(str(old_path)):
-                try: os.remove(str(old_path))
-                except: pass
+            return jsonify({"error": "S3 Upload failed", "message": "Failed to upload image to S3"}), 500
 
-        ad["imagePath"] = filename
-        ad["imageUrl"] = new_image_url
+        # Delete old S3 object — skip legacy local paths safely
+        old_path = ad.get("imagePath", "")
+        if isinstance(old_path, str) and old_path.startswith(("ads/", "admin/", "qrcodes/")):
+            asyncio.run(S3Service.delete_file(old_path))
+        elif old_path:
+            app.logger.warning(
+                "[S3 Skip] Old imagePath '%s' is a legacy local path — skipping delete.", old_path
+            )
 
-    save_ads_data(ads_data)
-    return jsonify(serialize_ad(ad)), 200
+        update_data["imagePath"] = filename
+        update_data["imageUrl"] = new_image_url
+
+    updated_ad = asyncio.run(AdsService.update_ad(ad_id, update_data))
+    return jsonify(serialize_ad(updated_ad)), 200
 
 
 @app.route("/ads/<int:ad_id>", methods=["DELETE"])
 @require_auth
 def delete_ad(ad_id: int):
-    """Delete an advertisement."""
-    global ads_data
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    """Delete an advertisement and its S3 image."""
+    ad = asyncio.run(AdsService.get_ad_by_id(ad_id))
     if not ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
 
-    ads_data = [item for item in ads_data if item["id"] != ad_id]
-    image_path = ad.get("imagePath")
-    if image_path:
-        if isinstance(image_path, str) and image_path.startswith("ads/"):
-            asyncio.run(S3Service.delete_file(image_path))
-        elif os.path.exists(str(image_path)):
-            try: os.remove(str(image_path))
-            except: pass
-    save_ads_data(ads_data)
+    image_path = ad.get("imagePath", "")
+    if isinstance(image_path, str) and image_path.startswith(("ads/", "admin/", "qrcodes/")):
+        asyncio.run(S3Service.delete_file(image_path))
+    elif image_path:
+        app.logger.warning(
+            "[S3 Skip] imagePath '%s' is a legacy local path — skipping delete.", image_path
+        )
+
+    asyncio.run(AdsService.delete_ad(ad_id))
     return jsonify({"deleted": ad_id}), 200
 
 
@@ -429,23 +400,21 @@ def delete_ad(ad_id: int):
 @require_auth
 def set_ad_status(ad_id: int):
     """Explicitly enable or disable a specific advertisement."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
+    ad = asyncio.run(AdsService.get_ad_by_id(ad_id))
     if not ad:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
-    
+
     data = request.get_json(silent=True) or {}
     is_active = data.get("isActive")
     if is_active is None:
         return jsonify({"error": "Bad Request", "message": "Missing 'isActive' boolean"}), 400
-    
-    ad["isActive"] = bool(is_active)
-    save_ads_data(ads_data)
-    
-    status_str = "enabled" if ad["isActive"] else "disabled"
+
+    updated = asyncio.run(AdsService.update_ad(ad_id, {"isActive": bool(is_active)}))
+    status_str = "enabled" if bool(is_active) else "disabled"
     return jsonify({
         "message": f"Ad {ad_id} {status_str} successfully",
         "ad_id": ad_id,
-        "isActive": ad["isActive"]
+        "isActive": bool(is_active)
     }), 200
 
 
@@ -453,18 +422,15 @@ def set_ad_status(ad_id: int):
 @require_auth
 def toggle_ad_status(ad_id: int):
     """Toggle the active status of a specific advertisement."""
-    ad = next((item for item in ads_data if item["id"] == ad_id), None)
-    if not ad:
+    updated = asyncio.run(AdsService.toggle_ad_status(ad_id))
+    if not updated:
         return jsonify({"error": "Not found", "message": "Ad does not exist"}), 404
-    
-    ad["isActive"] = not ad.get("isActive", True)
-    save_ads_data(ads_data)
-    
-    status_str = "enabled" if ad["isActive"] else "disabled"
+
+    status_str = "enabled" if updated.get("isActive") else "disabled"
     return jsonify({
         "message": f"Ad {ad_id} {status_str} successfully",
         "ad_id": ad_id,
-        "isActive": ad["isActive"]
+        "isActive": updated.get("isActive")
     }), 200
 
 

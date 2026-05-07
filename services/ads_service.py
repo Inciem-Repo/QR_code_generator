@@ -8,10 +8,16 @@ class AdsService:
         query = {}
         if placement:
             query["placement"] = placement
+        if only_active:
+            query["isActive"] = True
 
         cursor = db.db.ads.find(query)
         ads = await cursor.to_list(length=100)
-        
+
+        # Serialize ObjectId to string so JSON encoding never fails
+        for ad in ads:
+            if "_id" in ad:
+                ad["_id"] = str(ad["_id"])
         return ads
 
     @staticmethod
