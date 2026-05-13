@@ -21,81 +21,33 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background-color: #f4f4f4;
-                margin: 0;
-                padding: 0;
-            }}
-            .container {{
-                max-width: 600px;
-                margin: 40px auto;
-                background-color: #ffffff;
-                border-radius: 10px;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                overflow: hidden;
-            }}
+            /* Keep these for clients that support style blocks */
             .header {{
-                background-color: #667eea;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #ffffff;
-                padding: 30px;
-                text-align: center;
-            }}
-            .header h1 {{
-                margin: 0;
-                font-size: 28px;
-            }}
-            .content {{
-                padding: 40px 30px;
-                text-align: center;
-            }}
-            .content p {{
-                color: #555;
-                font-size: 16px;
-                line-height: 1.6;
-                margin-bottom: 30px;
+                background-color: #667eea !important;
             }}
             .otp-box {{
-                background-color: #667eea;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #ffffff;
-                font-size: 36px;
-                font-weight: bold;
-                letter-spacing: 8px;
-                padding: 20px;
-                border-radius: 8px;
-                display: inline-block;
-                margin: 20px 0;
-            }}
-            .footer {{
-                background-color: #f8f9fa;
-                padding: 20px;
-                text-align: center;
-                color: #888;
-                font-size: 14px;
-            }}
-            .warning {{
-                color: #e74c3c;
-                font-size: 14px;
-                margin-top: 20px;
+                background-color: #667eea !important;
             }}
         </style>
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1> {title}</h1>
+    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0;">
+        <div class="container" style="max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); overflow: hidden;">
+            <div class="header" style="background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; padding: 30px; text-align: center;">
+                <h1 style="margin: 0; font-size: 28px; color: #ffffff;">{title}</h1>
             </div>
-            <div class="content">
-                <p>{message}</p>
-                <div class="otp-box">{otp}</div>
-                <p class="warning">⚠️ This OTP is valid for 10 minutes. Do not share it with anyone.</p>
+            <div class="content" style="padding: 40px 30px; text-align: center;">
+                <p style="color: #555555; font-size: 16px; line-height: 1.6; margin-bottom: 30px;">{message}</p>
+                <div class="otp-box" style="background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; font-size: 36px; font-weight: bold; letter-spacing: 8px; padding: 20px; border-radius: 8px; display: inline-block; margin: 20px 0;">
+                    {otp}
+                </div>
+                <p class="warning" style="color: #e74c3c; font-size: 14px; margin-top: 20px;">⚠️ This OTP is valid for 10 minutes. Do not share it with anyone.</p>
             </div>
-            <div class="footer">
-                <p>QR Code Generator - Secure Authentication</p>
-                <p>If you didn't request this, please ignore this email.</p>
+            <div class="footer" style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #888888; font-size: 14px;">
+                <p style="margin: 5px 0;">QR Code Generator - Secure Authentication</p>
+                <p style="margin: 5px 0;">If you didn't request this, please ignore this email.</p>
             </div>
         </div>
     </body>
