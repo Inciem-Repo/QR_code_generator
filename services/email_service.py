@@ -26,21 +26,21 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
         <style>
             /* Keep these for clients that support style blocks */
             .header {{
-                background-color: #667eea !important;
+                background-color: #2563eb !important;
             }}
             .otp-box {{
-                background-color: #667eea !important;
+                background-color: #2563eb !important;
             }}
         </style>
     </head>
     <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0;">
         <div class="container" style="max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); overflow: hidden;">
-            <div class="header" style="background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; padding: 30px; text-align: center;">
+            <div class="header" style="background-color: #2563eb; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); color: #ffffff; padding: 30px; text-align: center;">
                 <h1 style="margin: 0; font-size: 28px; color: #ffffff;">{title}</h1>
             </div>
             <div class="content" style="padding: 40px 30px; text-align: center;">
                 <p style="color: #555555; font-size: 16px; line-height: 1.6; margin-bottom: 30px;">{message}</p>
-                <div class="otp-box" style="background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; font-size: 36px; font-weight: bold; letter-spacing: 8px; padding: 20px; border-radius: 8px; display: inline-block; margin: 20px 0;">
+                <div class="otp-box" style="background-color: #2563eb; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); color: #ffffff; font-size: 36px; font-weight: bold; letter-spacing: 8px; padding: 20px; border-radius: 8px; display: inline-block; margin: 20px 0;">
                     {otp}
                 </div>
                 <p class="warning" style="color: #e74c3c; font-size: 14px; margin-top: 20px;">⚠️ This OTP is valid for 10 minutes. Do not share it with anyone.</p>
