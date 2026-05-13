@@ -37,8 +37,9 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
                 overflow: hidden;
             }}
             .header {{
+                background-color: #667eea;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
+                color: #ffffff;
                 padding: 30px;
                 text-align: center;
             }}
@@ -57,8 +58,9 @@ def get_otp_email_template(otp: str, purpose: str = "verification") -> str:
                 margin-bottom: 30px;
             }}
             .otp-box {{
+                background-color: #667eea;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
+                color: #ffffff;
                 font-size: 36px;
                 font-weight: bold;
                 letter-spacing: 8px;
