@@ -7,6 +7,7 @@ All image storage is S3-only — no local filesystem is used.
 import json
 import re
 import uuid
+import os
 from functools import wraps
 from io import BytesIO
 
@@ -25,6 +26,13 @@ from utils.s3_utils import S3Service
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# Ensure upload directories exist
+for folder in ["uploads", "ads", "admin", "qrcodes"]:
+    if not os.path.exists(os.path.join(BASE_DIR, folder)):
+        os.makedirs(os.path.join(BASE_DIR, folder))
 
 @app.after_request
 def add_standard_fields(response):
